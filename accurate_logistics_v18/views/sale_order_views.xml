@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+  <!-- Inherit sale.order form – add Accurate Logistics tab + smart button -->
+  <record id="sale_order_view_form_accurate" model="ir.ui.view">
+    <field name="name">sale.order.form.accurate.logistics</field>
+    <field name="model">sale.order</field>
+    <field name="inherit_id" ref="sale.view_order_form"/>
+    <field name="arch" type="xml">
+
+      <!-- Smart button -->
+      <xpath expr="//div[@name='button_box']" position="inside">
+        <button name="action_view_accurate_shipments"
+                type="object"
+                class="oe_stat_button"
+                icon="fa-truck"
+                invisible="accurate_shipment_count == 0">
+          <div class="o_stat_info">
+            <field name="accurate_shipment_count" class="o_stat_value"/>
+            <span class="o_stat_text">Shipments</span>
+          </div>
+        </button>
+      </xpath>
+
+      <!-- Show Shipment Code + Status under Payment Terms on the form -->
+      <xpath expr="//field[@name='payment_term_id']" position="after">
+        <field name="accurate_shipment_code"
+               widget="badge"
+               decoration-danger="accurate_shipment_code"
+               readonly="1"
+               invisible="not accurate_shipment_code"/>
+        <field name="accurate_status_name"
+               widget="badge"
+               decoration-success="accurate_status_code in ('DEL','DLV','DELIVERED','DELIVERY')"
+               decoration-warning="accurate_status_code in ('SENT','IN_TRANSIT','OUT_FOR_DELIVERY','PICKED','OUT')"
+               decoration-danger="accurate_status_code in ('FAILED','CANCELLED','CANCELED','RETURNED','RTN','REJECTED')"
+               decoration-info="accurate_status_code and accurate_status_code not in ('DEL','DLV','DELIVERED','DELIVERY','SENT','IN_TRANSIT','OUT_FOR_DELIVERY','PICKED','OUT','FAILED','CANCELLED','CANCELED','RETURNED','RTN','REJECTED')"
+               readonly="1"
+               invisible="not accurate_status_name"/>
+        <field name="accurate_status_code" invisible="1"/>
+        <field name="accurate_tracking_url"
+               widget="url"
+               readonly="1"
+               invisible="not accurate_tracking_url"/>
+      </xpath>
+
+      <!-- New tab: Accurate Logistics (after "Other Info") -->
+      <xpath expr="//page[@name='other_information']" position="after">
+        <page string="Accurate Logistics" name="accurate_logistics">
+          <group>
+            <group string="1. Dispatch">
+              <field name="accurate_delivery_company_id"
+                     options="{'no_create': True}"
+                     placeholder="Pick the delivery company first…"/>
+            </group>
+            <group string="2. Delivery Zone">
+              <field name="accurate_recipient_zone_id"
+                     options="{'no_create': True}"
+                     readonly="not accurate_delivery_company_id"
+                     placeholder="Choose a Delivery Company first to see its zones"/>
+              <field name="accurate_recipient_subzone_id"
+                     options="{'no_create': True}"
+                     readonly="not accurate_recipient_zone_id"
+                     placeholder="Choose a Zone first to see its sub-zones"/>
+            </group>
+          </group>
+          <group string="Classification">
+            <group>
+              <field name="accurate_type_code"/>
+              <field name="accurate_payment_type_code"/>
+            </group>
+            <group>
+              <field name="accurate_price_type_code"/>
+              <field name="accurate_openable_code"/>
+            </group>
+          </group>
+          <div class="text-muted" invisible="accurate_shipment_count != 0">
+            <i class="fa fa-info-circle"/> Confirm the order to create a Delivery Order. The Accurate Logistics shipment is created when the Delivery Order is validated.
+          </div>
+        </page>
+      </xpath>
+
+    </field>
+  </record>
+
+  <!-- Add Accurate Shipment Code + Status as columns on the Quotations list -->
+  <record id="sale_order_view_list_accurate" model="ir.ui.view">
+    <field name="name">sale.order.list.accurate.logistics</field>
+    <field name="model">sale.order</field>
+    <field name="inherit_id" ref="sale.view_quotation_tree"/>
+    <field name="arch" type="xml">
+      <xpath expr="//field[@name='state']" position="after">
+        <field name="accurate_status_code" column_invisible="1"/>
+        <field name="accurate_shipment_code"
+               string="Shipment"
+               widget="badge"
+               decoration-danger="accurate_shipment_code"
+               optional="show"/>
+        <field name="accurate_status_name"
+               string="Delivery Status"
+               widget="badge"
+               decoration-success="accurate_status_code in ('DEL','DLV','DELIVERED','DELIVERY')"
+               decoration-warning="accurate_status_code in ('SENT','IN_TRANSIT','OUT_FOR_DELIVERY','PICKED','OUT')"
+               decoration-danger="accurate_status_code in ('FAILED','CANCELLED','CANCELED','RETURNED','RTN','REJECTED')"
+               decoration-info="accurate_status_code and accurate_status_code not in ('DEL','DLV','DELIVERED','DELIVERY','SENT','IN_TRANSIT','OUT_FOR_DELIVERY','PICKED','OUT','FAILED','CANCELLED','CANCELED','RETURNED','RTN','REJECTED')"
+               optional="show"/>
+      </xpath>
+    </field>
+  </record>
+
+  <!-- Same columns on the Sale Orders tree (different action) -->
+  <record id="sale_order_view_list_accurate2" model="ir.ui.view">
+    <field name="name">sale.order.list.accurate.logistics2</field>
+    <field name="model">sale.order</field>
+    <field name="inherit_id" ref="sale.view_order_tree"/>
+    <field name="arch" type="xml">
+      <xpath expr="//field[@name='state']" position="after">
+        <field name="accurate_status_code" column_invisible="1"/>
+        <field name="accurate_shipment_code"
+               string="Shipment"
+               widget="badge"
+               decoration-danger="accurate_shipment_code"
+               optional="show"/>
+        <field name="accurate_status_name"
+               string="Delivery Status"
+               widget="badge"
+               decoration-success="accurate_status_code in ('DEL','DLV','DELIVERED','DELIVERY')"
+               decoration-warning="accurate_status_code in ('SENT','IN_TRANSIT','OUT_FOR_DELIVERY','PICKED','OUT')"
+               decoration-danger="accurate_status_code in ('FAILED','CANCELLED','CANCELED','RETURNED','RTN','REJECTED')"
+               decoration-info="accurate_status_code and accurate_status_code not in ('DEL','DLV','DELIVERED','DELIVERY','SENT','IN_TRANSIT','OUT_FOR_DELIVERY','PICKED','OUT','FAILED','CANCELLED','CANCELED','RETURNED','RTN','REJECTED')"
+               optional="show"/>
+      </xpath>
+    </field>
+  </record>
+
+</odoo>

@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+  <record id="accurate_calculate_fees_wizard_view_form" model="ir.ui.view">
+    <field name="name">accurate.calculate.fees.wizard.form</field>
+    <field name="model">accurate.calculate.fees.wizard</field>
+    <field name="arch" type="xml">
+      <form string="Calculate Shipping Fees">
+        <sheet>
+          <group string="Shipment Parameters">
+            <group>
+              <field name="delivery_company_id"
+                     options="{'no_create': True}"/>
+              <field name="recipient_zone_id"
+                     readonly="not delivery_company_id"
+                     placeholder="Choose a Delivery Company first"/>
+              <field name="recipient_subzone_id"
+                     readonly="not recipient_zone_id"
+                     placeholder="Choose a Zone first"/>
+              <field name="service_id"
+                     options="{'no_create': True}"/>
+            </group>
+            <group>
+              <field name="price"/>
+              <field name="weight"/>
+              <field name="payment_type_code"/>
+              <field name="price_type_code"/>
+            </group>
+          </group>
+
+          <!-- Results section – visible after calculation -->
+          <group string="Fee Breakdown" invisible="not result_computed">
+            <group>
+              <field name="result_amount" readonly="1"/>
+              <field name="result_delivery" readonly="1"/>
+              <field name="result_weight" readonly="1"/>
+              <field name="result_collection" readonly="1"/>
+            </group>
+            <group>
+              <field name="result_post" readonly="1"/>
+              <field name="result_tax" readonly="1"/>
+              <field name="result_return" readonly="1"/>
+              <field name="result_total" readonly="1" class="fw-bold"/>
+            </group>
+          </group>
+        </sheet>
+
+        <footer>
+          <button name="action_calculate"
+                  string="Calculate"
+                  type="object"
+                  class="btn-primary"/>
+          <button name="action_apply_to_shipment"
+                  string="Apply to Shipment"
+                  type="object"
+                  class="btn-secondary"
+                  invisible="not result_computed or not shipment_id"/>
+          <button string="Close"
+                  class="btn-secondary"
+                  special="cancel"/>
+        </footer>
+      </form>
+    </field>
+  </record>
+
+  <record id="accurate_calculate_fees_wizard_action" model="ir.actions.act_window">
+    <field name="name">Calculate Shipping Fees</field>
+    <field name="res_model">accurate.calculate.fees.wizard</field>
+    <field name="view_mode">form</field>
+    <field name="target">new</field>
+  </record>
+
+</odoo>

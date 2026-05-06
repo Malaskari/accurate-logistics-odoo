@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+  <record id="res_config_settings_view_form_accurate" model="ir.ui.view">
+    <field name="name">accurate.res.config.settings.form</field>
+    <field name="model">res.config.settings</field>
+    <field name="inherit_id" ref="base.res_config_settings_view_form"/>
+    <field name="arch" type="xml">
+      <xpath expr="//form" position="inside">
+
+        <app string="Accurate Logistics"
+             name="accurate_logistics"
+             logo="/accurate_logistics/static/description/icon.png">
+
+          <block title="Automation" name="accurate_automation">
+            <setting string="Auto-create shipment on Delivery validation"
+                     help="When a delivery order is validated and a Delivery Company is set, automatically create the shipment in Accurate Logistics.">
+              <field name="accurate_auto_create"/>
+            </setting>
+          </block>
+
+          <block title="Webhook" name="accurate_webhook">
+            <setting string="Webhook Secret Token"
+                     help="A secret token included in the Callback URL. Generate a new one and paste the full URL into Accurate Logistics.">
+              <field name="accurate_webhook_secret"/>
+              <button string="Generate Secret"
+                      name="action_generate_webhook_secret"
+                      type="object"
+                      class="btn-secondary"/>
+            </setting>
+            <setting string="Callback URL (configure in Accurate Logistics)"
+                     help="Copy this URL and set it as the Callback URL in your Accurate Logistics account settings.">
+              <field name="accurate_webhook_url" readonly="1"/>
+            </setting>
+          </block>
+
+        </app>
+
+      </xpath>
+    </field>
+  </record>
+
+</odoo>

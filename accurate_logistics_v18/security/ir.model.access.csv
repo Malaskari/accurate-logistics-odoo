@@ -1,0 +1,13 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_accurate_branch_user,accurate.branch user,model_accurate_branch,base.group_user,1,0,0,0
+access_accurate_branch_manager,accurate.branch manager,model_accurate_branch,base.group_system,1,1,1,1
+access_accurate_zone_user,accurate.zone user,model_accurate_zone,base.group_user,1,0,0,0
+access_accurate_zone_manager,accurate.zone manager,model_accurate_zone,base.group_system,1,1,1,1
+access_accurate_service_user,accurate.service user,model_accurate_service,base.group_user,1,0,0,0
+access_accurate_service_manager,accurate.service manager,model_accurate_service,base.group_system,1,1,1,1
+access_accurate_delivery_company_user,accurate.delivery.company user,model_accurate_delivery_company,base.group_user,1,0,0,0
+access_accurate_delivery_company_manager,accurate.delivery.company manager,model_accurate_delivery_company,base.group_system,1,1,1,1
+access_accurate_shipment_user,accurate.shipment user,model_accurate_shipment,base.group_user,1,1,1,0
+access_accurate_shipment_manager,accurate.shipment manager,model_accurate_shipment,base.group_system,1,1,1,1
+access_accurate_shipment_product_user,accurate.shipment.product user,model_accurate_shipment_product,base.group_user,1,1,1,1
+access_accurate_calculate_fees_wizard,accurate.calculate.fees.wizard,model_accurate_calculate_fees_wizard,base.group_user,1,1,1,1
