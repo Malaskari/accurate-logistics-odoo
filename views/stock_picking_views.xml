@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+  <record id="stock_picking_view_form_accurate" model="ir.ui.view">
+    <field name="name">stock.picking.form.accurate.logistics</field>
+    <field name="model">stock.picking</field>
+    <field name="inherit_id" ref="stock.view_picking_form"/>
+    <field name="arch" type="xml">
+
+      <!-- Add button in the header for outgoing deliveries only -->
+      <xpath expr="//header/button[last()]" position="after">
+        <button name="action_create_accurate_shipment"
+                string="Send to Accurate Logistics"
+                type="object"
+                class="btn-primary"
+                invisible="picking_type_code != 'outgoing' or accurate_shipment_id != False"/>
+        <button name="action_open_accurate_shipment"
+                string="View Accurate Shipment"
+                type="object"
+                class="btn-secondary"
+                invisible="not accurate_shipment_id"/>
+      </xpath>
+
+      <!-- Add Accurate Logistics tab after "Additional Info" -->
+      <xpath expr="//page[@name='extra']" position="after">
+        <page string="Accurate Logistics" name="accurate_logistics"
+              invisible="picking_type_code != 'outgoing'">
+          <group>
+            <group string="1. Delivery Company">
+              <field name="accurate_delivery_company_id"
+                     options="{'no_create': True}"
+                     placeholder="Pick the delivery company first…"/>
+            </group>
+            <group string="2. Recipient Zone">
+              <field name="accurate_recipient_zone_id"
+                     options="{'no_create': True}"
+                     readonly="not accurate_delivery_company_id"
+                     placeholder="Pick a Delivery Company first"/>
+              <field name="accurate_recipient_subzone_id"
+                     options="{'no_create': True}"
+                     readonly="not accurate_recipient_zone_id"
+                     placeholder="Pick a Zone first"/>
+            </group>
+          </group>
+          <group string="Accurate Shipment" invisible="not accurate_shipment_id">
+            <field name="accurate_shipment_id" readonly="1"/>
+            <field name="accurate_shipment_code" readonly="1"/>
+            <field name="accurate_status" readonly="1"/>
+            <field name="accurate_tracking_url" readonly="1" widget="url"/>
+          </group>
+        </page>
+      </xpath>
+
+    </field>
+  </record>
+
+</odoo>

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+  <!-- ── Root app menu ────────────────────────────────────────────────────── -->
+  <menuitem id="accurate_logistics_menu_root"
+            name="Accurate Logistics"
+            sequence="85"
+            web_icon="accurate_logistics,static/description/icon.png"/>
+
+  <!-- ── Shipments ────────────────────────────────────────────────────────── -->
+  <menuitem id="accurate_shipment_menu"
+            name="Shipments"
+            parent="accurate_logistics_menu_root"
+            action="accurate_shipment_action"
+            sequence="10"/>
+
+  <!-- ── Configuration ────────────────────────────────────────────────────── -->
+  <menuitem id="accurate_config_menu"
+            name="Configuration"
+            parent="accurate_logistics_menu_root"
+            sequence="90"/>
+
+  <menuitem id="accurate_delivery_company_menu"
+            name="Delivery Companies"
+            parent="accurate_config_menu"
+            action="accurate_delivery_company_action"
+            sequence="10"/>
+
+  <menuitem id="accurate_zone_menu"
+            name="Zones"
+            parent="accurate_config_menu"
+            action="accurate_zone_action"
+            sequence="20"/>
+
+  <menuitem id="accurate_subzone_menu"
+            name="Sub-zones"
+            parent="accurate_config_menu"
+            action="accurate_subzone_action"
+            sequence="30"/>
+
+  <menuitem id="accurate_service_menu"
+            name="Shipping Services"
+            parent="accurate_config_menu"
+            action="accurate_service_action"
+            sequence="40"/>
+
+  <!-- Settings shortcut -->
+  <menuitem id="accurate_settings_menu"
+            name="Settings"
+            parent="accurate_config_menu"
+            action="base_setup.action_general_configuration"
+            sequence="100"/>
+
+</odoo>

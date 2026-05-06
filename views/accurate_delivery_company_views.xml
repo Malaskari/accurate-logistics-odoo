@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+  <!-- ── List ────────────────────────────────────────────────────────────── -->
+  <record id="accurate_delivery_company_view_list" model="ir.ui.view">
+    <field name="name">accurate.delivery.company.list</field>
+    <field name="model">accurate.delivery.company</field>
+    <field name="arch" type="xml">
+      <list string="Delivery Companies">
+        <field name="name"/>
+        <field name="api_url"/>
+        <field name="journal_id"/>
+        <field name="zone_count" string="Zones"/>
+        <field name="subzone_count" string="Sub-zones"/>
+        <field name="shipment_count" string="Shipments"/>
+        <field name="pending_count" string="In Transit"/>
+        <field name="active"/>
+      </list>
+    </field>
+  </record>
+
+  <!-- ── Form ────────────────────────────────────────────────────────────── -->
+  <record id="accurate_delivery_company_view_form" model="ir.ui.view">
+    <field name="name">accurate.delivery.company.form</field>
+    <field name="model">accurate.delivery.company</field>
+    <field name="arch" type="xml">
+      <form string="Delivery Company">
+
+        <header>
+          <button name="action_sync_all"
+                  string="Sync Zones &amp; Sub-zones"
+                  type="object"
+                  class="btn-primary"
+                  confirm="This will pull all zones and sub-zones from the API. It can take several minutes for large catalogs. Continue?"/>
+          <button name="action_sync_zones"
+                  string="Sync Zones Only"
+                  type="object"
+                  class="btn-secondary"/>
+          <button name="action_sync_subzones"
+                  string="Sync Sub-zones Only"
+                  type="object"
+                  class="btn-secondary"
+                  invisible="zone_count == 0"/>
+          <button name="action_clear_zones"
+                  string="Clear Zones"
+                  type="object"
+                  class="btn-secondary"
+                  confirm="This will unlink all zones from this company (zones are not deleted). Continue?"
+                  invisible="zone_count == 0"/>
+        </header>
+
+        <sheet>
+          <!-- Smart buttons -->
+          <div class="oe_button_box" name="button_box">
+            <button name="action_view_shipments"
+                    type="object"
+                    class="oe_stat_button"
+                    icon="fa-truck">
+              <div class="o_stat_info">
+                <field name="shipment_count" class="o_stat_value"/>
+                <span class="o_stat_text">Shipments</span>
+              </div>
+            </button>
+            <button name="action_view_shipments"
+                    type="object"
+                    class="oe_stat_button"
+                    icon="fa-clock-o">
+              <div class="o_stat_info">
+                <field name="pending_count" class="o_stat_value"/>
+                <span class="o_stat_text">In Transit</span>
+              </div>
+            </button>
+            <button type="object"
+                    name="action_view_zones"
+                    class="oe_stat_button"
+                    icon="fa-map-marker">
+              <div class="o_stat_info">
+                <field name="zone_count" class="o_stat_value"/>
+                <span class="o_stat_text">Zones</span>
+              </div>
+            </button>
+            <button type="object"
+                    name="action_view_subzones"
+                    class="oe_stat_button"
+                    icon="fa-map-pin">
+              <div class="o_stat_info">
+                <field name="subzone_count" class="o_stat_value"/>
+                <span class="o_stat_text">Sub-zones</span>
+              </div>
+            </button>
+          </div>
+
+          <widget name="web_ribbon" title="Archived" bg_color="bg-danger"
+                  invisible="active"/>
+
+          <!-- Live sync progress -->
+          <div class="alert alert-info" invisible="not sync_in_progress">
+            <i class="fa fa-spinner fa-spin"/>
+            <strong> Syncing in background:</strong>
+            <field name="sync_progress" readonly="1" nolabel="1" class="oe_inline"/>
+            <span class="text-muted"> — refresh the page to update progress.</span>
+          </div>
+          <div class="alert alert-success" invisible="sync_in_progress or not sync_progress">
+            <field name="sync_progress" readonly="1" nolabel="1" class="oe_inline"/>
+          </div>
+
+          <div class="oe_title">
+            <h1><field name="name" placeholder="Company Name"/></h1>
+          </div>
+
+          <!-- API Connection -->
+          <group string="API Connection">
+            <group>
+              <field name="api_url" placeholder="https://marsool.lg.accuratess.com:8001/graphql"/>
+              <field name="api_username"/>
+              <field name="api_password" password="True"/>
+              <field name="ssl_verify"/>
+              <field name="api_branch_id"
+                     placeholder="Leave empty for default"/>
+              <field name="api_country_id"
+                     placeholder="Leave empty for default"/>
+            </group>
+            <group>
+              <div>
+                <button string="Test Connection"
+                        name="action_test_connection"
+                        type="object"
+                        class="btn-primary mt16"/>
+              </div>
+            </group>
+          </group>
+
+          <!-- Accounting & Status -->
+          <group>
+            <group string="Accounting">
+              <field name="journal_id"/>
+            </group>
+            <group string="Delivery Status">
+              <field name="delivered_status_codes"/>
+              <field name="default_service_id"
+                     options="{'no_create': True}"/>
+            </group>
+          </group>
+
+          <notebook>
+
+            <!-- Zones tab -->
+            <page string="Zones" name="zones">
+              <div class="alert alert-info" invisible="zone_count != 0">
+                <strong>No zones yet.</strong>
+                Click <b>Sync Zones from API</b> in the header to pull zones from
+                Accurate Logistics and link them to this company.
+                Then click <b>Sync Sub-zones</b> to pull sub-zones.
+              </div>
+              <field name="zone_ids"
+                     widget="many2many_tags"
+                     options="{'no_create': True}"
+                     invisible="zone_count == 0"/>
+              <separator string="Sub-zones" invisible="subzone_count == 0"/>
+              <field name="subzone_ids"
+                     widget="many2many_tags"
+                     options="{'no_create': True}"
+                     invisible="subzone_count == 0"/>
+            </page>
+
+            <!-- Branches tab -->
+            <page string="Branches" name="branches">
+              <div class="alert alert-info" invisible="branch_count != 0">
+                <strong>No branches discovered yet.</strong>
+                Click <b>Test Connection</b> in the API Connection section above —
+                it probes the API for available branches and lists them here.
+              </div>
+              <field name="branch_ids" readonly="1"
+                     invisible="branch_count == 0">
+                <list>
+                  <field name="api_id" string="Branch ID"/>
+                  <field name="sample_zone" string="Sample Zone"/>
+                  <field name="zone_count" string="Zones"/>
+                </list>
+              </field>
+            </page>
+
+            <!-- Notes tab -->
+            <page string="Notes" name="notes">
+              <field name="notes" nolabel="1"
+                     placeholder="Internal notes about this delivery company…"/>
+            </page>
+
+          </notebook>
+        </sheet>
+
+        <chatter/>
+
+      </form>
+    </field>
+  </record>
+
+  <!-- ── Action ──────────────────────────────────────────────────────────── -->
+  <record id="accurate_delivery_company_action" model="ir.actions.act_window">
+    <field name="name">Delivery Companies</field>
+    <field name="res_model">accurate.delivery.company</field>
+    <field name="view_mode">list,form</field>
+  </record>
+
+</odoo>

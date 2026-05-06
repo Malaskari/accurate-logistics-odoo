@@ -1,0 +1,528 @@
+# Arabic translation for the Accurate Logistics module.
+# This file is in PO format (gettext).
+msgid ""
+msgstr ""
+"Project-Id-Version: Odoo Server 19.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-05-06 00:00+0000\n"
+"PO-Revision-Date: 2026-05-06 00:00+0000\n"
+"Language-Team: Arabic\n"
+"Language: ar\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=6; plural=(n==0 ? 0 : n==1 ? 1 : n==2 ? 2 : n%100>=3 && n%100<=10 ? 3 : n%100>=11 ? 4 : 5);\n"
+
+#. module: accurate_logistics
+msgid "Accurate Logistics"
+msgstr "آكيوريت لوجستيكس"
+
+#. module: accurate_logistics
+msgid "Accurate Delivery Company"
+msgstr "شركة الشحن (آكيوريت)"
+
+#. module: accurate_logistics
+msgid "Delivery Companies"
+msgstr "شركات الشحن"
+
+#. module: accurate_logistics
+msgid "Delivery Company"
+msgstr "شركة الشحن"
+
+#. module: accurate_logistics
+msgid "Accurate Logistics Shipment"
+msgstr "شحنة آكيوريت لوجستيكس"
+
+#. module: accurate_logistics
+msgid "Accurate Logistics Zone"
+msgstr "منطقة آكيوريت لوجستيكس"
+
+#. module: accurate_logistics
+msgid "Shipments"
+msgstr "الشحنات"
+
+#. module: accurate_logistics
+msgid "Configuration"
+msgstr "الإعدادات"
+
+#. module: accurate_logistics
+msgid "Zones"
+msgstr "المناطق"
+
+#. module: accurate_logistics
+msgid "Sub-zones"
+msgstr "المناطق الفرعية"
+
+#. module: accurate_logistics
+msgid "Services"
+msgstr "خدمات الشحن"
+
+# ── Company form ─────────────────────────────────────────────────────────
+
+#. module: accurate_logistics
+msgid "Company Name"
+msgstr "اسم الشركة"
+
+#. module: accurate_logistics
+msgid "API Connection"
+msgstr "الاتصال بواجهة برمجة التطبيقات"
+
+#. module: accurate_logistics
+msgid "API Endpoint"
+msgstr "رابط الواجهة"
+
+#. module: accurate_logistics
+msgid "Username"
+msgstr "اسم المستخدم"
+
+#. module: accurate_logistics
+msgid "Password"
+msgstr "كلمة المرور"
+
+#. module: accurate_logistics
+msgid "Verify SSL Certificate"
+msgstr "التحقق من شهادة SSL"
+
+#. module: accurate_logistics
+msgid "Branch ID"
+msgstr "معرّف الفرع"
+
+#. module: accurate_logistics
+msgid "Country ID"
+msgstr "معرّف الدولة"
+
+#. module: accurate_logistics
+msgid "Test Connection"
+msgstr "اختبار الاتصال"
+
+#. module: accurate_logistics
+msgid "Connection Successful"
+msgstr "تم الاتصال بنجاح"
+
+#. module: accurate_logistics
+msgid "Sync Zones from API"
+msgstr "تحميل المناطق من الواجهة"
+
+#. module: accurate_logistics
+msgid "Sync Zones & Sub-zones"
+msgstr "تحميل المناطق والمناطق الفرعية"
+
+#. module: accurate_logistics
+msgid "Sync Zones Only"
+msgstr "تحميل المناطق فقط"
+
+#. module: accurate_logistics
+msgid "Sync Sub-zones"
+msgstr "تحميل المناطق الفرعية"
+
+#. module: accurate_logistics
+msgid "Sync Sub-zones Only"
+msgstr "تحميل المناطق الفرعية فقط"
+
+#. module: accurate_logistics
+msgid "Sync Sub-zones from API"
+msgstr "تحميل المناطق الفرعية من الواجهة"
+
+#. module: accurate_logistics
+msgid "Clear Zones"
+msgstr "إفراغ المناطق"
+
+#. module: accurate_logistics
+msgid "Sync Started"
+msgstr "بدأت عملية التحميل"
+
+#. module: accurate_logistics
+msgid "Sync Complete"
+msgstr "اكتملت عملية التحميل"
+
+#. module: accurate_logistics
+msgid "Zones Synced"
+msgstr "تم تحميل المناطق"
+
+#. module: accurate_logistics
+msgid "Sub-zones Synced"
+msgstr "تم تحميل المناطق الفرعية"
+
+#. module: accurate_logistics
+msgid "Sync in Progress"
+msgstr "جارٍ التحميل"
+
+#. module: accurate_logistics
+msgid "Sync Progress"
+msgstr "تقدّم التحميل"
+
+# ── Branches ─────────────────────────────────────────────────────────────
+
+#. module: accurate_logistics
+msgid "Branches"
+msgstr "الفروع"
+
+#. module: accurate_logistics
+msgid "Discovered Branches"
+msgstr "الفروع المكتشفة"
+
+#. module: accurate_logistics
+msgid "Sample Zone"
+msgstr "نموذج منطقة"
+
+#. module: accurate_logistics
+msgid "Sample Zone Name"
+msgstr "نموذج اسم المنطقة"
+
+#. module: accurate_logistics
+msgid "Zones in Branch"
+msgstr "عدد المناطق في الفرع"
+
+# ── Accounting ───────────────────────────────────────────────────────────
+
+#. module: accurate_logistics
+msgid "Accounting"
+msgstr "المحاسبة"
+
+#. module: accurate_logistics
+msgid "COD Journal"
+msgstr "دفتر الدفع عند الاستلام"
+
+#. module: accurate_logistics
+msgid "Default Shipping Service"
+msgstr "خدمة الشحن الافتراضية"
+
+#. module: accurate_logistics
+msgid "Delivered Status Codes"
+msgstr "أكواد حالة التسليم"
+
+#. module: accurate_logistics
+msgid "Delivery Status"
+msgstr "حالة الشحنة"
+
+#. module: accurate_logistics
+msgid "Delivery Status Code"
+msgstr "كود حالة الشحنة"
+
+# ── Shipment ─────────────────────────────────────────────────────────────
+
+#. module: accurate_logistics
+msgid "Shipment Code"
+msgstr "رقم الشحنة"
+
+#. module: accurate_logistics
+msgid "Tracking URL"
+msgstr "رابط التتبّع"
+
+#. module: accurate_logistics
+msgid "Reference"
+msgstr "المرجع"
+
+#. module: accurate_logistics
+msgid "Your Reference"
+msgstr "مرجعك"
+
+#. module: accurate_logistics
+msgid "Shipment Date"
+msgstr "تاريخ الشحنة"
+
+#. module: accurate_logistics
+msgid "Expected Delivery"
+msgstr "تاريخ التسليم المتوقع"
+
+#. module: accurate_logistics
+msgid "Recipient Name"
+msgstr "اسم المستلم"
+
+#. module: accurate_logistics
+msgid "Recipient Phone"
+msgstr "هاتف المستلم"
+
+#. module: accurate_logistics
+msgid "Recipient Mobile"
+msgstr "جوال المستلم"
+
+#. module: accurate_logistics
+msgid "Recipient Address"
+msgstr "عنوان المستلم"
+
+#. module: accurate_logistics
+msgid "Recipient Zone"
+msgstr "منطقة المستلم"
+
+#. module: accurate_logistics
+msgid "Recipient Sub-zone"
+msgstr "المنطقة الفرعية للمستلم"
+
+#. module: accurate_logistics
+msgid "Sender Name"
+msgstr "اسم المرسِل"
+
+#. module: accurate_logistics
+msgid "Sender Phone"
+msgstr "هاتف المرسِل"
+
+#. module: accurate_logistics
+msgid "Sender Mobile"
+msgstr "جوال المرسِل"
+
+#. module: accurate_logistics
+msgid "Sender Address"
+msgstr "عنوان المرسِل"
+
+#. module: accurate_logistics
+msgid "Sender Zone"
+msgstr "منطقة المرسِل"
+
+#. module: accurate_logistics
+msgid "Sender Sub-zone"
+msgstr "المنطقة الفرعية للمرسِل"
+
+#. module: accurate_logistics
+msgid "Shipping Service"
+msgstr "خدمة الشحن"
+
+#. module: accurate_logistics
+msgid "Shipment Type"
+msgstr "نوع الشحنة"
+
+#. module: accurate_logistics
+msgid "Type"
+msgstr "النوع"
+
+#. module: accurate_logistics
+msgid "Payment Type"
+msgstr "نوع الدفع"
+
+#. module: accurate_logistics
+msgid "Price Type"
+msgstr "نوع السعر"
+
+#. module: accurate_logistics
+msgid "Openable"
+msgstr "إمكانية الفتح"
+
+#. module: accurate_logistics
+msgid "Weight (kg)"
+msgstr "الوزن (كغم)"
+
+#. module: accurate_logistics
+msgid "Pieces"
+msgstr "عدد القطع"
+
+#. module: accurate_logistics
+msgid "Return Pieces"
+msgstr "قطع المرتجع"
+
+#. module: accurate_logistics
+msgid "Declared Value"
+msgstr "القيمة المعلنة"
+
+#. module: accurate_logistics
+msgid "Description"
+msgstr "الوصف"
+
+#. module: accurate_logistics
+msgid "Notes"
+msgstr "ملاحظات"
+
+# ── Selection values: Type ───────────────────────────────────────────────
+
+#. module: accurate_logistics
+msgid "Full Package Delivery"
+msgstr "تسليم كامل الطرد"
+
+#. module: accurate_logistics
+msgid "Partial Package Delivery"
+msgstr "تسليم جزء من الطرد"
+
+#. module: accurate_logistics
+msgid "Package Exchange"
+msgstr "استبدال الطرد"
+
+#. module: accurate_logistics
+msgid "Return Shipment"
+msgstr "استرجاع الشحنة"
+
+# ── Selection values: Payment Type ───────────────────────────────────────
+
+#. module: accurate_logistics
+msgid "COD – Collect on Delivery"
+msgstr "الدفع عند الاستلام"
+
+#. module: accurate_logistics
+msgid "Credit / Postpaid"
+msgstr "آجل / بريد"
+
+#. module: accurate_logistics
+msgid "Cash – Already Paid"
+msgstr "نقداً (مسدد مسبقاً)"
+
+# ── Selection values: Price Type ─────────────────────────────────────────
+
+#. module: accurate_logistics
+msgid "Shipping Fee Excluded from Price"
+msgstr "تكلفة الشحن غير مشمولة بالسعر"
+
+#. module: accurate_logistics
+msgid "Shipping Fee Included in Price"
+msgstr "تكلفة الشحن مشمولة بالسعر"
+
+# ── Selection values: Openable ───────────────────────────────────────────
+
+#. module: accurate_logistics
+msgid "Yes – Can Open"
+msgstr "نعم – يمكن الفتح"
+
+#. module: accurate_logistics
+msgid "No – Cannot Open"
+msgstr "لا – لا يمكن الفتح"
+
+# ── Buttons ──────────────────────────────────────────────────────────────
+
+#. module: accurate_logistics
+msgid "Send to Accurate Logistics"
+msgstr "إرسال إلى آكيوريت لوجستيكس"
+
+#. module: accurate_logistics
+msgid "Send to API"
+msgstr "إرسال إلى الواجهة"
+
+#. module: accurate_logistics
+msgid "Sync Status"
+msgstr "تحديث الحالة"
+
+#. module: accurate_logistics
+msgid "Calculate Fees"
+msgstr "حساب التكلفة"
+
+#. module: accurate_logistics
+msgid "Track"
+msgstr "تتبّع"
+
+#. module: accurate_logistics
+msgid "Reset to Draft"
+msgstr "إعادة إلى المسودة"
+
+#. module: accurate_logistics
+msgid "Calculate"
+msgstr "احسب"
+
+#. module: accurate_logistics
+msgid "Apply to Shipment"
+msgstr "تطبيق على الشحنة"
+
+#. module: accurate_logistics
+msgid "Close"
+msgstr "إغلاق"
+
+# ── Sale Order ───────────────────────────────────────────────────────────
+
+#. module: accurate_logistics
+msgid "Delivery Zone"
+msgstr "منطقة التسليم"
+
+#. module: accurate_logistics
+msgid "Dispatch"
+msgstr "إرسال"
+
+#. module: accurate_logistics
+msgid "1. Dispatch"
+msgstr "١. اختر شركة الشحن"
+
+#. module: accurate_logistics
+msgid "2. Delivery Zone"
+msgstr "٢. منطقة التسليم"
+
+#. module: accurate_logistics
+msgid "1. Delivery Company"
+msgstr "١. شركة الشحن"
+
+#. module: accurate_logistics
+msgid "2. Recipient Zone"
+msgstr "٢. منطقة المستلم"
+
+#. module: accurate_logistics
+msgid "Classification"
+msgstr "تصنيف الشحنة"
+
+#. module: accurate_logistics
+msgid "Pick the delivery company first…"
+msgstr "اختر شركة الشحن أولاً…"
+
+#. module: accurate_logistics
+msgid "Pick a Delivery Company first"
+msgstr "الرجاء اختيار شركة الشحن أولاً"
+
+#. module: accurate_logistics
+msgid "Pick a Zone first"
+msgstr "الرجاء اختيار المنطقة أولاً"
+
+#. module: accurate_logistics
+msgid "Choose a Delivery Company first"
+msgstr "اختر شركة الشحن أولاً"
+
+#. module: accurate_logistics
+msgid "Choose a Zone first"
+msgstr "اختر المنطقة أولاً"
+
+# ── Notes / page titles ──────────────────────────────────────────────────
+
+#. module: accurate_logistics
+msgid "Recipient"
+msgstr "المستلم"
+
+#. module: accurate_logistics
+msgid "Sender"
+msgstr "المرسِل"
+
+#. module: accurate_logistics
+msgid "Details"
+msgstr "التفاصيل"
+
+#. module: accurate_logistics
+msgid "Products"
+msgstr "المنتجات"
+
+#. module: accurate_logistics
+msgid "Active"
+msgstr "فعّال"
+
+# ── Webhook / Settings ───────────────────────────────────────────────────
+
+#. module: accurate_logistics
+msgid "Automation"
+msgstr "الأتمتة"
+
+#. module: accurate_logistics
+msgid "Webhook"
+msgstr "ويبهوك"
+
+#. module: accurate_logistics
+msgid "Webhook Secret Token"
+msgstr "رمز السرّ للويبهوك"
+
+#. module: accurate_logistics
+msgid "Webhook URL"
+msgstr "رابط الويبهوك"
+
+#. module: accurate_logistics
+msgid "Generate Secret"
+msgstr "توليد رمز سرّي"
+
+#. module: accurate_logistics
+msgid "Auto-create shipment when Delivery is validated"
+msgstr "إنشاء الشحنة تلقائياً عند تأكيد أمر التسليم"
+
+# ── Status / states ──────────────────────────────────────────────────────
+
+#. module: accurate_logistics
+msgid "Draft"
+msgstr "مسودة"
+
+#. module: accurate_logistics
+msgid "Sent"
+msgstr "تم الإرسال"
+
+#. module: accurate_logistics
+msgid "Error"
+msgstr "خطأ"
+
+#. module: accurate_logistics
+msgid "In Transit"
+msgstr "في الطريق"

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+  <record id="accurate_service_view_list" model="ir.ui.view">
+    <field name="name">accurate.service.list</field>
+    <field name="model">accurate.service</field>
+    <field name="arch" type="xml">
+      <list string="Shipping Services">
+        <field name="name"/>
+        <field name="api_id"/>
+        <field name="active"/>
+      </list>
+    </field>
+  </record>
+
+  <record id="accurate_service_view_form" model="ir.ui.view">
+    <field name="name">accurate.service.form</field>
+    <field name="model">accurate.service</field>
+    <field name="arch" type="xml">
+      <form string="Shipping Service">
+        <sheet>
+          <group>
+            <field name="name"/>
+            <field name="api_id"/>
+            <field name="active"/>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <record id="accurate_service_action" model="ir.actions.act_window">
+    <field name="name">Shipping Services</field>
+    <field name="res_model">accurate.service</field>
+    <field name="view_mode">list,form</field>
+  </record>
+
+</odoo>
