@@ -78,6 +78,16 @@ class AccurateDeliveryCompany(models.Model):
         tracking=True,
         help='COD payments will be posted to this journal when delivery is confirmed.',
     )
+    expense_account_id = fields.Many2one(
+        'account.account',
+        string='Shipping Expense Account',
+        domain=[('account_type', '=', 'expense')],
+        tracking=True,
+        help='Account used to book the courier\'s delivery fee as an expense '
+             'when a shipment uses "Shipping Fee Included in Price" (INCLD). '
+             'On delivery, the fee deducted by the courier from the COD '
+             'collection is debited to this account.',
+    )
     delivered_status_codes = fields.Char(
         'Delivered Status Codes',
         default='DEL,DLV,DELIVERED',

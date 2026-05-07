@@ -434,6 +434,114 @@ class AccurateShipment(models.Model):
                     body='Accurate Logistics: shipment <b>%s</b> delivered. Invoice and payment created automatically.' % (self.code or self.name)
                 )
 
+            # ── 4. Book courier's delivery fee as an expense ──────────────
+            # Only when the shipment uses "Shipping Fee Included in Price".
+            # In that mode the customer paid the full amount (incl. shipping),
+            # the courier collected it all and remits (collection - fee), so we
+            # record the difference as a shipping expense.
+            if self.price_type_code == 'INCLD':
+                self._book_shipping_fee_expense()
+
+    def _book_shipping_fee_expense(self):
+        """Post a journal entry that records the courier's delivery fee as
+        an expense and reduces the COD journal's cash/bank balance by the
+        same amount.
+
+        Dr. Shipping Expense  fee
+            Cr. COD Journal Bank/Cash  fee
+
+        This represents what the courier kept from the COD collection.
+        Triggered only when price_type_code == 'INCLD' and we have a
+        non-zero fee.
+        """
+        self.ensure_one()
+        company = self.delivery_company_id
+        if not company:
+            return
+        if not company.expense_account_id:
+            _logger.info(
+                'Accurate: shipment %s is INCLD but no Shipping Expense '
+                'Account configured on Delivery Company %s — skipping.',
+                self.name, company.name,
+            )
+            self.message_post(
+                body='<b>Note:</b> Shipping fee not booked — Delivery Company '
+                     '<b>%s</b> has no Shipping Expense Account set.' % company.name
+            )
+            return
+        if not company.journal_id:
+            return
+
+        fee = self.fee_delivery or self.fee_total or 0.0
+        if fee <= 0:
+            _logger.info(
+                'Accurate: shipment %s INCLD but fee is 0 — skipping expense booking.',
+                self.name,
+            )
+            return
+
+        # Resolve the journal's cash/bank account.
+        journal = company.journal_id
+        cash_account = (
+            journal.default_account_id
+            or getattr(journal, 'payment_credit_account_id', False)
+            or getattr(journal, 'payment_debit_account_id', False)
+        )
+        if not cash_account:
+            _logger.warning(
+                'Accurate: cannot book shipping expense for %s — journal %s has '
+                'no default account.',
+                self.name, journal.name,
+            )
+            self.message_post(
+                body='<b>Warning:</b> Shipping fee not booked — Journal '
+                     '<b>%s</b> has no default account configured.' % journal.name
+            )
+            return
+
+        currency = journal.currency_id or self.env.company.currency_id
+        ref = 'Accurate shipping fee — %s' % (self.code or self.name)
+        line_name = 'Shipping fee retained by %s — %s' % (
+            company.name, self.code or self.name
+        )
+
+        move = self.env['account.move'].create({
+            'journal_id': journal.id,
+            'date': fields.Date.today(),
+            'ref': ref,
+            'move_type': 'entry',
+            'line_ids': [
+                (0, 0, {
+                    'name': line_name,
+                    'account_id': company.expense_account_id.id,
+                    'debit': fee,
+                    'credit': 0.0,
+                    'currency_id': currency.id,
+                }),
+                (0, 0, {
+                    'name': line_name,
+                    'account_id': cash_account.id,
+                    'debit': 0.0,
+                    'credit': fee,
+                    'currency_id': currency.id,
+                }),
+            ],
+        })
+        try:
+            move.action_post()
+        except Exception as exc:
+            _logger.warning(
+                'Accurate: shipping-expense entry %s posted failed for %s: %s',
+                move.name, self.name, exc,
+            )
+        self.message_post(
+            body=(
+                'Shipping fee <b>%.2f %s</b> booked as expense to '
+                '<b>%s</b> (entry <b>%s</b>) — courier retained from COD.'
+            ) % (fee, currency.symbol or currency.name,
+                 company.expense_account_id.display_name, move.name)
+        )
+
     # ── Other actions ─────────────────────────────────────────────────────────
 
     def action_open_invoice(self):

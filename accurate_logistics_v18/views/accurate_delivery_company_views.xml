@@ -134,6 +134,9 @@
           <group>
             <group string="Accounting">
               <field name="journal_id"/>
+              <field name="expense_account_id"
+                     options="{'no_create': True}"
+                     placeholder="Used when 'Shipping Fee Included in Price'…"/>
             </group>
             <group string="Delivery Status">
               <field name="delivered_status_codes"/>
@@ -189,11 +192,7 @@
           </notebook>
         </sheet>
 
-        <div class="oe_chatter">
-          <field name="message_follower_ids"/>
-          <field name="activity_ids"/>
-          <field name="message_ids"/>
-        </div>
+        <chatter/>
 
       </form>
     </field>
