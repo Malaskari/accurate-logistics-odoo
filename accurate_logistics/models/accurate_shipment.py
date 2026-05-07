@@ -582,29 +582,36 @@ class AccurateShipment(models.Model):
 
     def _on_returned(self):
         """Webhook/cron handler when the shipment is returned to sender (RTRN).
-        - Set state = 'returned'.
+        - Set state = 'returned' and refresh api_status to reflect it.
         - Reverse invoice + shipping-fee expense.
         - Cancel pending pickings + create a return picking if delivery was already validated.
+        - Cancel the Sale Order so it disappears from the active pipeline.
         - Notify the sale order's chatter.
         """
         self.ensure_one()
         if self.state == 'returned':
             return
-        self.state = 'returned'
+        self.write({
+            'state': 'returned',
+            'api_status_code': 'RTRN',
+            'api_status_name': 'Returned',
+        })
         self.message_post(
             body='<b>Returned</b> — shipment was returned to sender. '
-                 'Reversing COD invoice / payment / shipping-expense if needed, '
-                 'and handling pickings.'
+                 'Reversing COD invoice / payment / shipping-expense, '
+                 'handling pickings, and cancelling the Sale Order.'
         )
 
         self._reverse_invoice_if_any(reason='Shipment returned to sender')
         self._reverse_expense_if_any(reason='Shipment returned to sender')
         self._handle_pickings_on_reverse(reason='Shipment returned to sender')
+        self._cancel_sale_order_if_any(reason='Shipment returned to sender')
 
         if self.sale_id:
             self.sale_id.message_post(
                 body='Accurate Logistics: shipment <b>%s</b> was <b>returned</b>. '
-                     'Any COD invoice has been reversed.' % (self.code or self.name)
+                     'Any COD invoice has been reversed and the order cancelled.'
+                     % (self.code or self.name)
             )
 
     # ── Cancelled: reverse anything that was booked ───────────────────────────
@@ -612,32 +619,80 @@ class AccurateShipment(models.Model):
     def _on_cancelled(self):
         """Webhook/cron/manual handler when the shipment is cancelled (RJCT
         or CANCELLED in the API).
-        - Set state = 'cancelled'.
+        - Set state = 'cancelled' and refresh api_status to reflect it.
         - Reverse invoice + shipping-fee expense.
         - Cancel pending pickings + create a return picking if delivery was already validated.
-        - Don't fire the COD flow if it hadn't fired yet.
+        - Cancel the Sale Order so it disappears from the active pipeline.
         """
         self.ensure_one()
         if self.state == 'cancelled':
             return
-        self.state = 'cancelled'
+        self.write({
+            'state': 'cancelled',
+            'api_status_code': 'CANCELLED',
+            'api_status_name': 'Cancelled',
+        })
         self.message_post(
             body='<b>Cancelled</b> — shipment was cancelled. '
-                 'Reversing COD invoice / payment / shipping-expense if needed, '
-                 'and handling pickings.'
+                 'Reversing COD invoice / payment / shipping-expense, '
+                 'handling pickings, and cancelling the Sale Order.'
         )
 
         self._reverse_invoice_if_any(reason='Shipment cancelled')
         self._reverse_expense_if_any(reason='Shipment cancelled')
         self._handle_pickings_on_reverse(reason='Shipment cancelled')
+        self._cancel_sale_order_if_any(reason='Shipment cancelled')
 
         if self.sale_id:
             self.sale_id.message_post(
                 body='Accurate Logistics: shipment <b>%s</b> was <b>cancelled</b>. '
-                     'Any COD invoice has been reversed.' % (self.code or self.name)
+                     'Any COD invoice has been reversed and the order cancelled.'
+                     % (self.code or self.name)
             )
 
     # ── Reversal helpers (shared between returned + cancelled flows) ──────────
+
+    def _cancel_sale_order_if_any(self, reason='Shipment reversed'):
+        """Cancel the linked Sale Order so the operations dashboard reflects
+        reality. We only act if the SO is still in a non-terminal state and
+        has no other active shipments on it.
+        """
+        self.ensure_one()
+        sale = self.sale_id
+        if not sale:
+            return
+        if sale.state in ('cancel', 'draft'):
+            return
+        # If the SO has another shipment that is still active, don't cancel
+        # the SO — the user may be doing partial-shipment / split deliveries.
+        active_siblings = sale.accurate_shipment_ids.filtered(
+            lambda s: s.state in ('draft', 'sent', 'delivered') and s.id != self.id
+        )
+        if active_siblings:
+            self.message_post(
+                body='Sale Order <b>%s</b> not cancelled — it has %d other '
+                     'active shipment(s). Cancel them first if you want the '
+                     'order cancelled.' % (sale.name, len(active_siblings))
+            )
+            return
+        try:
+            # Standard Odoo SO cancel — handles linked invoices / pickings safely.
+            if hasattr(sale, '_action_cancel'):
+                sale._action_cancel()
+            else:
+                sale.action_cancel()
+            self.message_post(
+                body='Sale Order <b>%s</b> cancelled (%s).' % (sale.name, reason)
+            )
+        except Exception as exc:
+            _logger.warning(
+                'Accurate: failed to cancel Sale Order %s: %s', sale.name, exc
+            )
+            self.message_post(
+                body='<b>Warning:</b> Could not auto-cancel Sale Order '
+                     '<b>%s</b>. Please cancel manually. Error: %s'
+                     % (sale.name, exc)
+            )
 
     def _handle_pickings_on_reverse(self, reason='Shipment reversed'):
         """Cancel pending pickings and/or create a return picking when a
