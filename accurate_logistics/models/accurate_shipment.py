@@ -765,7 +765,7 @@ class AccurateShipment(models.Model):
 
     def _create_return_for_done_pickings(self, pickings, reason):
         """For each picking already in 'done' state, spawn a return picking
-        using the standard stock.return.picking wizard.
+        using the standard stock.return.picking wizard with explicit lines.
 
         We only return the OUTGOING picking (or the dispatch picking in
         multi-step setups) — those are the ones that physically left the
@@ -773,54 +773,85 @@ class AccurateShipment(models.Model):
         Pack steps would just shuffle stock around inside the warehouse.
         """
         self.ensure_one()
-        # Pick the outgoing picking that was validated. If none, take the
-        # most recently done picking.
         candidates = pickings.filtered(lambda p: p.state == 'done')
         outgoing_done = candidates.filtered(lambda p: p.picking_type_code == 'outgoing')
         target_pickings = outgoing_done or candidates
         if not target_pickings:
             return
 
+        # The 'completed quantity' field on stock.move was renamed across
+        # versions: Odoo 19 = `quantity`, Odoo 16-18 = `quantity_done`,
+        # very old = `product_uom_qty`. Fall back through the list.
+        def _move_qty(move):
+            for fname in ('quantity', 'quantity_done', 'product_uom_qty'):
+                if fname in move._fields:
+                    val = getattr(move, fname, 0.0) or 0.0
+                    if val:
+                        return val
+            return 0.0
+
         ReturnWizard = self.env['stock.return.picking']
+        Picking = self.env['stock.picking']
         for src in target_pickings:
-            # Skip if a return for this picking already exists
-            if src.search_count([('origin', 'ilike', src.name), ('picking_type_id.code', '=', 'incoming'), ('state', '!=', 'cancel')]):
+            # Skip if a return picking for this source already exists
+            existing = Picking.search([
+                ('origin', '=', 'Return of %s' % src.name),
+                ('state', '!=', 'cancel'),
+            ], limit=1)
+            if existing:
                 self.message_post(
-                    body='Return picking already exists for <b>%s</b>, skipping.' % src.name
+                    body='Return picking <b>%s</b> already exists for <b>%s</b>, skipping.'
+                         % (existing.name, src.name)
                 )
                 continue
+
+            # Build explicit return-move lines so we don't depend on the
+            # wizard's default_get behavior (which differs by Odoo version).
+            return_lines = []
+            for m in src.move_ids:
+                if m.state != 'done':
+                    continue
+                qty = _move_qty(m)
+                if qty <= 0:
+                    continue
+                return_lines.append((0, 0, {
+                    'product_id': m.product_id.id,
+                    'quantity': qty,
+                    'move_id': m.id,
+                    'uom_id': m.product_uom.id,
+                }))
+            if not return_lines:
+                self.message_post(
+                    body='No delivered moves found on <b>%s</b> — return picking '
+                         'would be empty, so skipping.' % src.name
+                )
+                continue
+
             try:
                 wizard = ReturnWizard.with_context(
                     active_id=src.id,
                     active_ids=src.ids,
                     active_model='stock.picking',
-                ).create({})
-                # Trigger default population of return-move lines
-                if hasattr(wizard, '_compute_moves_locations'):
-                    wizard._compute_moves_locations()
-                # Manually populate lines if still empty (some Odoo versions)
-                if not wizard.product_return_moves:
-                    moves = []
-                    for m in src.move_ids.filtered(lambda mv: mv.state == 'done'):
-                        moves.append((0, 0, {
-                            'product_id': m.product_id.id,
-                            'quantity': m.product_uom_qty,
-                            'move_id': m.id,
-                            'uom_id': m.product_uom.id,
-                        }))
-                    if moves:
-                        wizard.product_return_moves = moves
-                action = wizard.action_create_returns() if hasattr(wizard, 'action_create_returns') else wizard.create_returns()
+                ).create({
+                    'picking_id': src.id,
+                    'product_return_moves': return_lines,
+                })
+                action = (wizard.action_create_returns()
+                          if hasattr(wizard, 'action_create_returns')
+                          else wizard.create_returns())
                 new_pid = (action or {}).get('res_id') if isinstance(action, dict) else None
-                new_pick = self.env['stock.picking'].browse(new_pid) if new_pid else self.env['stock.picking']
+                new_pick = Picking.browse(new_pid) if new_pid else Picking
                 if new_pick:
                     self.message_post(
-                        body='Return picking <b>%s</b> created from <b>%s</b> — receive goods back to stock.'
-                             % (new_pick.name, src.name)
+                        body=('Return picking <b>%s</b> created from <b>%s</b> '
+                              'with %d line(s) — validate it when goods arrive '
+                              'physically.')
+                             % (new_pick.name, src.name, len(return_lines))
                     )
                 else:
                     self.message_post(
-                        body='Return wizard ran for <b>%s</b> but did not return a picking id.' % src.name
+                        body='Return wizard ran for <b>%s</b> but did not return a picking id.'
+                             % src.name
                     )
             except Exception as exc:
                 _logger.warning(
