@@ -7,13 +7,17 @@
     <field name="inherit_id" ref="stock.view_picking_form"/>
     <field name="arch" type="xml">
 
-      <!-- Add button in the header for outgoing deliveries only -->
+      <!-- Show on the FIRST picking of the delivery chain.
+           For 1-step delivery: the outgoing picking.
+           For 2-step (Pick→Ship) or 3-step (Pick→Pack→Ship) delivery:
+           the FIRST internal picking, not the final outgoing one. -->
       <xpath expr="//header/button[last()]" position="after">
+        <field name="accurate_is_dispatch_step" invisible="1"/>
         <button name="action_create_accurate_shipment"
                 string="Send to Accurate Logistics"
                 type="object"
                 class="btn-primary"
-                invisible="picking_type_code != 'outgoing' or accurate_shipment_id != False"/>
+                invisible="not accurate_is_dispatch_step or accurate_shipment_id != False"/>
         <button name="action_open_accurate_shipment"
                 string="View Accurate Shipment"
                 type="object"
@@ -24,7 +28,7 @@
       <!-- Add Accurate Logistics tab after "Additional Info" -->
       <xpath expr="//page[@name='extra']" position="after">
         <page string="Accurate Logistics" name="accurate_logistics"
-              invisible="picking_type_code != 'outgoing'">
+              invisible="not accurate_is_dispatch_step">
           <group>
             <group string="1. Delivery Company">
               <field name="accurate_delivery_company_id"

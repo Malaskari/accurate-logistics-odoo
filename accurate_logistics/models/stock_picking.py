@@ -81,6 +81,49 @@ class StockPicking(models.Model):
         readonly=True,
     )
 
+    # ── First-step detection (multi-step delivery aware) ──────────────────────
+
+    accurate_is_dispatch_step = fields.Boolean(
+        compute='_compute_accurate_is_dispatch_step',
+        help='True if this is the picking where the Accurate Logistics shipment '
+             'should be created. For 1-step delivery: the outgoing picking. '
+             'For 2-step (Pick→Ship) or 3-step (Pick→Pack→Ship) delivery: the '
+             'FIRST picking in the chain.',
+    )
+
+    @api.depends('picking_type_code', 'move_ids', 'move_ids.move_orig_ids', 'move_ids.move_dest_ids')
+    def _compute_accurate_is_dispatch_step(self):
+        for rec in self:
+            rec.accurate_is_dispatch_step = rec._accurate_is_first_in_delivery_chain()
+
+    def _accurate_is_first_in_delivery_chain(self):
+        """A picking is the 'first step' if:
+          - It has NO predecessor moves (no `move_orig_ids`), AND
+          - Its chain of downstream moves eventually ends in an outgoing
+            picking (so internal pickings unrelated to delivery are excluded).
+        """
+        self.ensure_one()
+        has_predecessor = any(m.move_orig_ids for m in self.move_ids)
+        if has_predecessor:
+            return False
+        if self.picking_type_code == 'outgoing':
+            return True
+        if self.picking_type_code != 'internal':
+            return False
+        seen = set()
+        moves_to_check = self.move_ids
+        while moves_to_check:
+            next_moves = self.env['stock.move']
+            for m in moves_to_check:
+                if m.id in seen:
+                    continue
+                seen.add(m.id)
+                if m.picking_id and m.picking_id.picking_type_code == 'outgoing':
+                    return True
+                next_moves |= m.move_dest_ids
+            moves_to_check = next_moves
+        return False
+
     # ── Validation hook ───────────────────────────────────────────────────────
 
     def _action_done(self):
@@ -91,12 +134,14 @@ class StockPicking(models.Model):
             .get_param('accurate_logistics.auto_create', 'False')
         )
         if str(auto_create).strip().lower() in ('true', '1'):
-            outgoing = self.filtered(
-                lambda p: p.picking_type_code == 'outgoing'
+            # Fire on the FIRST step of the delivery chain — for 2/3-step
+            # warehouses this is the internal Pick, not the final Ship.
+            to_create = self.filtered(
+                lambda p: p._accurate_is_first_in_delivery_chain()
                 and p.accurate_delivery_company_id
                 and not p.accurate_shipment_id
             )
-            for picking in outgoing:
+            for picking in to_create:
                 try:
                     picking.action_create_accurate_shipment()
                 except Exception as exc:
