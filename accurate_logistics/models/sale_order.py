@@ -32,6 +32,14 @@ class SaleOrder(models.Model):
         tracking=True,
         help='The Accurate Logistics delivery company that will handle this order.',
     )
+    accurate_service_id = fields.Many2one(
+        'accurate.service',
+        string='Shipping Service',
+        tracking=True,
+        help='Which shipping service (Express / Standard / Same-day…) to use. '
+             'If empty, the Delivery Company\'s default service will be used '
+             'when the shipment is created.',
+    )
 
     # ── Shipment classification (passed to the API on dispatch) ────────────
     accurate_type_code = fields.Selection(
@@ -147,6 +155,8 @@ class SaleOrder(models.Model):
                     vals['accurate_recipient_subzone_id'] = order.accurate_recipient_subzone_id.id
                 if order.accurate_delivery_company_id:
                     vals['accurate_delivery_company_id'] = order.accurate_delivery_company_id.id
+                if order.accurate_service_id:
+                    vals['accurate_service_id'] = order.accurate_service_id.id
                 if order.accurate_type_code:
                     vals['accurate_type_code'] = order.accurate_type_code
                 if order.accurate_payment_type_code:
@@ -236,6 +246,11 @@ class SaleOrder(models.Model):
             'price_type_code': self.accurate_price_type_code or 'EXCLD',
             'openable_code': self.accurate_openable_code or 'N',
         }
+        # Pass the user's chosen Shipping Service if one was picked on the SO;
+        # otherwise leave it blank and the shipment's _send_to_api will fall
+        # back to the Delivery Company's default service.
+        if self.accurate_service_id:
+            shipment_vals['service_id'] = self.accurate_service_id.id
         shipment = self.env['accurate.shipment'].create(shipment_vals)
 
         # Back-link to the picking so the View-Shipment button shows up there.

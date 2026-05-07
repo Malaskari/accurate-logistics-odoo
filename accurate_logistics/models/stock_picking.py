@@ -25,6 +25,10 @@ class StockPicking(models.Model):
         'accurate.delivery.company',
         string='Delivery Company (Accurate)',
     )
+    accurate_service_id = fields.Many2one(
+        'accurate.service',
+        string='Shipping Service',
+    )
 
     # ── Shipment classification (passed to the API on dispatch) ──────────────
     accurate_type_code = fields.Selection(
@@ -227,6 +231,8 @@ class StockPicking(models.Model):
             'price_type_code': self.accurate_price_type_code or 'EXCLD',
             'openable_code': self.accurate_openable_code or 'N',
         }
+        if self.accurate_service_id:
+            shipment_vals['service_id'] = self.accurate_service_id.id
 
         shipment = self.env['accurate.shipment'].create(shipment_vals)
         shipment.action_send_to_api()

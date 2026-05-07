@@ -34,6 +34,9 @@
               <field name="accurate_delivery_company_id"
                      options="{'no_create': True}"
                      placeholder="Pick the delivery company first…"/>
+              <field name="accurate_service_id"
+                     options="{'no_create': True}"
+                     placeholder="Default service used if left empty"/>
             </group>
             <group string="2. Recipient Zone">
               <field name="accurate_recipient_zone_id"
