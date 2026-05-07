@@ -405,6 +405,8 @@ class AccurateApiMixin(models.AbstractModel):
                     collectionFees
                     totalAmount
                     collected
+                    cancellable
+                    cancelled
                     recipientName
                     recipientPhone
                     recipientMobile

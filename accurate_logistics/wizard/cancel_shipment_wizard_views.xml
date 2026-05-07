@@ -16,6 +16,7 @@
                    options="{'no_create': True}"
                    placeholder="Pick a reason from the synced list…"/>
             <field name="notes" placeholder="Internal notes (optional)…"/>
+            <field name="force_local_cancel"/>
           </group>
           <div class="alert alert-warning" role="alert">
             <strong>This will:</strong>
