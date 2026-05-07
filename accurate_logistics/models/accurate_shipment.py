@@ -602,10 +602,30 @@ class AccurateShipment(models.Model):
                  'handling pickings, and cancelling the Sale Order.'
         )
 
-        self._reverse_invoice_if_any(reason='Shipment returned to sender')
-        self._reverse_expense_if_any(reason='Shipment returned to sender')
-        self._handle_pickings_on_reverse(reason='Shipment returned to sender')
-        self._cancel_sale_order_if_any(reason='Shipment returned to sender')
+        reason = 'Shipment returned to sender'
+        self._reverse_invoice_if_any(reason=reason)
+        self._reverse_expense_if_any(reason=reason)
+
+        # Snapshot the pickings BEFORE we touch the SO — once the SO is
+        # cancelled, sale_id.picking_ids may still resolve them but their
+        # state may have shifted, so we lock in the recordset here.
+        captured = self.env['stock.picking']
+        if self.sale_id:
+            captured |= self.sale_id.picking_ids
+        if self.picking_id:
+            captured |= self.picking_id
+
+        company = self.delivery_company_id
+        if company and getattr(company, 'auto_cancel_pickings', True):
+            self._cancel_pending_pickings(captured)
+
+        # Cancel the SO BEFORE creating returns — Odoo's SO._action_cancel
+        # cascades to all linked pickings via cancel_propagation rules; if we
+        # created the return first, it would be killed in that cascade.
+        self._cancel_sale_order_if_any(reason=reason)
+
+        if company and getattr(company, 'auto_create_return_picking', True):
+            self._create_return_for_done_pickings(captured, reason)
 
         if self.sale_id:
             self.sale_id.message_post(
@@ -638,10 +658,28 @@ class AccurateShipment(models.Model):
                  'handling pickings, and cancelling the Sale Order.'
         )
 
-        self._reverse_invoice_if_any(reason='Shipment cancelled')
-        self._reverse_expense_if_any(reason='Shipment cancelled')
-        self._handle_pickings_on_reverse(reason='Shipment cancelled')
-        self._cancel_sale_order_if_any(reason='Shipment cancelled')
+        reason = 'Shipment cancelled'
+        self._reverse_invoice_if_any(reason=reason)
+        self._reverse_expense_if_any(reason=reason)
+
+        # Snapshot the pickings BEFORE we touch the SO.
+        captured = self.env['stock.picking']
+        if self.sale_id:
+            captured |= self.sale_id.picking_ids
+        if self.picking_id:
+            captured |= self.picking_id
+
+        company = self.delivery_company_id
+        if company and getattr(company, 'auto_cancel_pickings', True):
+            self._cancel_pending_pickings(captured)
+
+        # Cancel the SO BEFORE creating returns — Odoo's SO._action_cancel
+        # cascades to all linked pickings via cancel_propagation rules; if we
+        # created the return first, it would be killed in that cascade.
+        self._cancel_sale_order_if_any(reason=reason)
+
+        if company and getattr(company, 'auto_create_return_picking', True):
+            self._create_return_for_done_pickings(captured, reason)
 
         if self.sale_id:
             self.sale_id.message_post(
@@ -842,6 +880,33 @@ class AccurateShipment(models.Model):
                 new_pid = (action or {}).get('res_id') if isinstance(action, dict) else None
                 new_pick = Picking.browse(new_pid) if new_pid else Picking
                 if new_pick:
+                    # If the source's procurement group belonged to a now-
+                    # cancelled SO, lingering cancel-propagation rules might
+                    # try to cancel this fresh return. Detach it from the
+                    # group to keep it independent.
+                    if 'group_id' in new_pick._fields and new_pick.group_id:
+                        try:
+                            new_pick.group_id = False
+                            for mv in new_pick.move_ids:
+                                if 'group_id' in mv._fields:
+                                    mv.group_id = False
+                        except Exception as exc:
+                            _logger.info(
+                                'Accurate: could not clear group_id on %s: %s',
+                                new_pick.name, exc
+                            )
+                    # If something already cancelled it, revive it to assigned.
+                    if new_pick.state == 'cancel':
+                        try:
+                            if hasattr(new_pick, 'action_back_to_draft'):
+                                new_pick.action_back_to_draft()
+                            new_pick.action_confirm()
+                            new_pick.action_assign()
+                        except Exception as exc:
+                            _logger.warning(
+                                'Accurate: return picking %s was cancelled and '
+                                'could not be revived: %s', new_pick.name, exc
+                            )
                     self.message_post(
                         body=('Return picking <b>%s</b> created from <b>%s</b> '
                               'with %d line(s) — validate it when goods arrive '
