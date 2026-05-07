@@ -1,4 +1,8 @@
+import logging
+
 from odoo import api, fields, models
+
+_logger = logging.getLogger(__name__)
 
 
 class SaleOrder(models.Model):
@@ -134,32 +138,119 @@ class SaleOrder(models.Model):
     def _action_confirm(self):
         res = super()._action_confirm()
         for order in self:
-            if not order.picking_ids:
-                continue
-            vals = {}
-            if order.accurate_recipient_zone_id:
-                vals['accurate_recipient_zone_id'] = order.accurate_recipient_zone_id.id
-            if order.accurate_recipient_subzone_id:
-                vals['accurate_recipient_subzone_id'] = order.accurate_recipient_subzone_id.id
-            if order.accurate_delivery_company_id:
-                vals['accurate_delivery_company_id'] = order.accurate_delivery_company_id.id
-            if order.accurate_type_code:
-                vals['accurate_type_code'] = order.accurate_type_code
-            if order.accurate_payment_type_code:
-                vals['accurate_payment_type_code'] = order.accurate_payment_type_code
-            if order.accurate_price_type_code:
-                vals['accurate_price_type_code'] = order.accurate_price_type_code
-            if order.accurate_openable_code:
-                vals['accurate_openable_code'] = order.accurate_openable_code
-            if vals:
-                # Propagate to the FIRST step of the delivery chain. In a
-                # 2/3-step warehouse the outgoing picking may not exist at
-                # this point (it's created lazily when the Pick is validated),
-                # so we target the Pick step instead. As a fallback, write to
-                # ALL pickings linked to the SO so nothing is missed.
-                dispatch_pickings = order.picking_ids.filtered(
-                    lambda p: p._accurate_is_first_in_delivery_chain()
-                )
-                target = dispatch_pickings or order.picking_ids
-                target.write(vals)
+            # 1. Propagate Accurate fields to the dispatch picking
+            if order.picking_ids:
+                vals = {}
+                if order.accurate_recipient_zone_id:
+                    vals['accurate_recipient_zone_id'] = order.accurate_recipient_zone_id.id
+                if order.accurate_recipient_subzone_id:
+                    vals['accurate_recipient_subzone_id'] = order.accurate_recipient_subzone_id.id
+                if order.accurate_delivery_company_id:
+                    vals['accurate_delivery_company_id'] = order.accurate_delivery_company_id.id
+                if order.accurate_type_code:
+                    vals['accurate_type_code'] = order.accurate_type_code
+                if order.accurate_payment_type_code:
+                    vals['accurate_payment_type_code'] = order.accurate_payment_type_code
+                if order.accurate_price_type_code:
+                    vals['accurate_price_type_code'] = order.accurate_price_type_code
+                if order.accurate_openable_code:
+                    vals['accurate_openable_code'] = order.accurate_openable_code
+                if vals:
+                    # Propagate to the FIRST step of the delivery chain. In a
+                    # 2/3-step warehouse the outgoing picking may not exist at
+                    # this point (it's created lazily when the Pick is validated),
+                    # so we target the Pick step instead. As a fallback, write to
+                    # ALL pickings linked to the SO so nothing is missed.
+                    dispatch_pickings = order.picking_ids.filtered(
+                        lambda p: p._accurate_is_first_in_delivery_chain()
+                    )
+                    target = dispatch_pickings or order.picking_ids
+                    target.write(vals)
+
+            # 2. Auto-create the Accurate shipment as soon as the SO is
+            #    confirmed — provided the delivery company + recipient zone
+            #    + sub-zone are all set. We don't auto-send if any of those
+            #    are missing; the salesperson can still click "Send to
+            #    Accurate Logistics" later from the picking once they fill
+            #    them in.
+            if (
+                order.accurate_delivery_company_id
+                and order.accurate_recipient_zone_id
+                and order.accurate_recipient_subzone_id
+                and not order.accurate_shipment_ids
+            ):
+                try:
+                    order._create_accurate_shipment(send_to_api=True)
+                except Exception as exc:
+                    _logger.warning(
+                        'Accurate Logistics: auto-create on SO confirm failed for %s: %s',
+                        order.name, exc,
+                    )
+                    # Don't break SO confirmation if Accurate is unreachable.
+                    # The user can retry from the picking form.
         return res
+
+    # ── Helper used by both auto-confirm and the manual picking button ────────
+
+    def _create_accurate_shipment(self, send_to_api=True):
+        """Build an `accurate.shipment` from this SO and link it to the
+        dispatch picking if one exists. Returns the created shipment.
+
+        If a shipment already exists for this SO, returns it untouched
+        (the caller is responsible for showing a 'already exists' popup).
+        """
+        self.ensure_one()
+        if self.accurate_shipment_ids:
+            return self.accurate_shipment_ids[:1]
+
+        partner = self.partner_shipping_id or self.partner_id
+
+        def _addr():
+            parts = filter(None, [
+                partner.street, partner.street2,
+                partner.city,
+                partner.country_id.name if partner.country_id else None,
+            ])
+            return ', '.join(parts) or partner.name or ''
+
+        # Locate the dispatch picking (Pick step in 2/3-step setups, otherwise
+        # the outgoing). Skipped silently if no picking exists yet.
+        dispatch = self.picking_ids.filtered(
+            lambda p: p._accurate_is_first_in_delivery_chain()
+        )[:1]
+
+        shipment_vals = {
+            'sale_id': self.id,
+            'picking_id': dispatch.id if dispatch else False,
+            'delivery_company_id': self.accurate_delivery_company_id.id,
+            'recipient_name': partner.name or '',
+            'recipient_phone': (partner.phone or getattr(partner, 'mobile', '') or ''),
+            'recipient_mobile': (getattr(partner, 'mobile', '') or partner.phone or ''),
+            'recipient_address': _addr(),
+            'recipient_zone_id': self.accurate_recipient_zone_id.id,
+            'recipient_subzone_id': self.accurate_recipient_subzone_id.id,
+            'ref_number': self.name,
+            'price': self.amount_total,
+            'type_code': self.accurate_type_code or 'FDP',
+            'payment_type_code': self.accurate_payment_type_code or 'COLC',
+            'price_type_code': self.accurate_price_type_code or 'EXCLD',
+            'openable_code': self.accurate_openable_code or 'N',
+        }
+        shipment = self.env['accurate.shipment'].create(shipment_vals)
+
+        # Back-link to the picking so the View-Shipment button shows up there.
+        if dispatch and not dispatch.accurate_shipment_id:
+            dispatch.accurate_shipment_id = shipment.id
+
+        if send_to_api:
+            try:
+                shipment.action_send_to_api()
+            except Exception as exc:
+                # Keep the shipment in 'draft'/'error' state so the user can
+                # retry from its form. Don't re-raise during SO confirmation.
+                _logger.warning(
+                    'Accurate Logistics: shipment %s created but send-to-API failed: %s',
+                    shipment.name, exc,
+                )
+
+        return shipment

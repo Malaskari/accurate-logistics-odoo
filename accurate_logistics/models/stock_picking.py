@@ -167,21 +167,33 @@ class StockPicking(models.Model):
     # ── Manual dispatch button ────────────────────────────────────────────────
 
     def action_create_accurate_shipment(self):
-        """Create (or re-create) a shipment in Accurate Logistics for this delivery."""
+        """Create a shipment in Accurate Logistics for this delivery — or
+        gracefully reuse the one that already exists for the linked Sale Order.
+        """
         self.ensure_one()
 
+        # ── Already linked on THIS picking → just open it with a popup ──
         if self.accurate_shipment_id:
-            raise UserError(
-                'An Accurate Logistics shipment already exists for this delivery: %s'
-                % self.accurate_shipment_id.code
-            )
+            return self._accurate_show_already_exists_popup(self.accurate_shipment_id)
+
+        # ── Already exists on the Sale Order (auto-created at SO confirm,
+        #    or created from a sibling picking) → link & open with popup ──
+        sale = getattr(self, 'sale_id', False)
+        if sale and sale.accurate_shipment_ids:
+            existing = sale.accurate_shipment_ids[:1]
+            self.accurate_shipment_id = existing.id
+            return self._accurate_show_already_exists_popup(existing)
+
+        # ── No existing shipment → validate inputs & create ──
         if not self.accurate_delivery_company_id:
             raise UserError(
-                'Please select a Delivery Company before sending to Accurate Logistics.'
+                'Please select a Delivery Company before sending to Accurate Logistics.\n'
+                'يرجى اختيار شركة الشحن قبل الإرسال إلى أكيوريت لوجيستكس.'
             )
         if not self.accurate_recipient_zone_id or not self.accurate_recipient_subzone_id:
             raise UserError(
-                'Please select Recipient Zone and Sub-zone before sending to Accurate Logistics.'
+                'Please select Recipient Zone and Sub-zone before sending to Accurate Logistics.\n'
+                'يرجى اختيار منطقة المستلم والمنطقة الفرعية قبل الإرسال.'
             )
 
         partner = self.partner_id
@@ -194,7 +206,6 @@ class StockPicking(models.Model):
             return ', '.join(parts) or partner.name or ''
 
         weight = getattr(self, 'shipping_weight', 0.0) or getattr(self, 'weight', 0.0) or 0.0
-        sale = getattr(self, 'sale_id', False)
         price = sale.amount_total if sale else 0.0
 
         shipment_vals = {
@@ -229,6 +240,37 @@ class StockPicking(models.Model):
             'res_id': shipment.id,
             'view_mode': 'form',
             'target': 'current',
+        }
+
+    def _accurate_show_already_exists_popup(self, shipment):
+        """Display a sticky warning notification AND open the existing
+        shipment form. Used when the user clicks 'Send to Accurate' but a
+        shipment already exists for this Sale Order / picking.
+        """
+        self.ensure_one()
+        ship_label = shipment.code or shipment.name or '—'
+        status_label = shipment.api_status_name or shipment.api_status_code or 'pending'
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': 'Shipment Already Exists / شحنة موجودة بالفعل',
+                'message': (
+                    'A shipment was already created for this Sale Order: %s '
+                    '(status: %s). Opening the existing shipment instead.\n'
+                    'تم إنشاء شحنة بالفعل لأمر البيع هذا: %s (الحالة: %s). '
+                    'سيتم فتح الشحنة الموجودة.'
+                ) % (ship_label, status_label, ship_label, status_label),
+                'type': 'warning',
+                'sticky': True,
+                'next': {
+                    'type': 'ir.actions.act_window',
+                    'name': 'Accurate Shipment',
+                    'res_model': 'accurate.shipment',
+                    'res_id': shipment.id,
+                    'view_mode': 'form',
+                },
+            },
         }
 
     def action_open_accurate_shipment(self):
