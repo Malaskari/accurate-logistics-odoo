@@ -583,9 +583,8 @@ class AccurateShipment(models.Model):
     def _on_returned(self):
         """Webhook/cron handler when the shipment is returned to sender (RTRN).
         - Set state = 'returned'.
-        - If invoice was already created and posted/paid → make a credit note (refund).
-        - If invoice was created but still draft → cancel it.
-        - If shipping-fee expense entry was booked → reverse it.
+        - Reverse invoice + shipping-fee expense.
+        - Cancel pending pickings + create a return picking if delivery was already validated.
         - Notify the sale order's chatter.
         """
         self.ensure_one()
@@ -594,11 +593,13 @@ class AccurateShipment(models.Model):
         self.state = 'returned'
         self.message_post(
             body='<b>Returned</b> — shipment was returned to sender. '
-                 'Reversing COD invoice / payment / shipping-expense if needed.'
+                 'Reversing COD invoice / payment / shipping-expense if needed, '
+                 'and handling pickings.'
         )
 
         self._reverse_invoice_if_any(reason='Shipment returned to sender')
         self._reverse_expense_if_any(reason='Shipment returned to sender')
+        self._handle_pickings_on_reverse(reason='Shipment returned to sender')
 
         if self.sale_id:
             self.sale_id.message_post(
@@ -612,7 +613,8 @@ class AccurateShipment(models.Model):
         """Webhook/cron/manual handler when the shipment is cancelled (RJCT
         or CANCELLED in the API).
         - Set state = 'cancelled'.
-        - Reverse invoice / shipping-expense if they exist.
+        - Reverse invoice + shipping-fee expense.
+        - Cancel pending pickings + create a return picking if delivery was already validated.
         - Don't fire the COD flow if it hadn't fired yet.
         """
         self.ensure_one()
@@ -621,11 +623,13 @@ class AccurateShipment(models.Model):
         self.state = 'cancelled'
         self.message_post(
             body='<b>Cancelled</b> — shipment was cancelled. '
-                 'Reversing COD invoice / payment / shipping-expense if needed.'
+                 'Reversing COD invoice / payment / shipping-expense if needed, '
+                 'and handling pickings.'
         )
 
         self._reverse_invoice_if_any(reason='Shipment cancelled')
         self._reverse_expense_if_any(reason='Shipment cancelled')
+        self._handle_pickings_on_reverse(reason='Shipment cancelled')
 
         if self.sale_id:
             self.sale_id.message_post(
@@ -634,6 +638,144 @@ class AccurateShipment(models.Model):
             )
 
     # ── Reversal helpers (shared between returned + cancelled flows) ──────────
+
+    def _handle_pickings_on_reverse(self, reason='Shipment reversed'):
+        """Cancel pending pickings and/or create a return picking when a
+        shipment is cancelled or returned.
+
+        Rules (per Delivery Company config flags):
+          - auto_cancel_pickings (default True):
+              Pickings in {draft, waiting, confirmed, assigned} → call
+              picking._action_cancel() so the warehouse dashboard is clean.
+              Cancelled in dependency-correct order (Ship before Pick) so
+              chained moves don't refuse.
+          - auto_create_return_picking (default True):
+              Pickings already in 'done' state → spawn a stock return
+              picking via the standard `stock.return.picking` wizard so
+              warehouse staff can receive the goods back.
+        """
+        self.ensure_one()
+        company = self.delivery_company_id
+        if not company:
+            return
+
+        # Collect every picking linked to this shipment (via the SO chain
+        # OR the direct picking_id link). Multi-step warehouses spawn
+        # multiple pickings per SO so we walk the whole chain.
+        pickings = self.env['stock.picking']
+        if self.sale_id:
+            pickings |= self.sale_id.picking_ids
+        if self.picking_id:
+            pickings |= self.picking_id
+        if not pickings:
+            return
+
+        if getattr(company, 'auto_cancel_pickings', True):
+            self._cancel_pending_pickings(pickings)
+        if getattr(company, 'auto_create_return_picking', True):
+            self._create_return_for_done_pickings(pickings, reason)
+
+    def _cancel_pending_pickings(self, pickings):
+        """Cancel all pickings that are not yet validated. Try Ship first,
+        then Pick, so chained moves don't complain.
+        """
+        self.ensure_one()
+        pending = pickings.filtered(
+            lambda p: p.state in ('draft', 'waiting', 'confirmed', 'assigned')
+        )
+        if not pending:
+            return
+        # Order: outgoing first, then internal (Ship before Pick)
+        ordered = pending.sorted(
+            lambda p: 0 if p.picking_type_code == 'outgoing' else 1
+        )
+        cancelled_names = []
+        for p in ordered:
+            try:
+                p._action_cancel()
+                cancelled_names.append(p.name)
+            except Exception as exc:
+                _logger.warning(
+                    'Accurate: failed to cancel picking %s: %s', p.name, exc
+                )
+                self.message_post(
+                    body='<b>Warning:</b> Could not cancel picking <b>%s</b>: %s'
+                         % (p.name, exc)
+                )
+        if cancelled_names:
+            self.message_post(
+                body='Cancelled pending picking(s): <b>%s</b>.'
+                     % ', '.join(cancelled_names)
+            )
+
+    def _create_return_for_done_pickings(self, pickings, reason):
+        """For each picking already in 'done' state, spawn a return picking
+        using the standard stock.return.picking wizard.
+
+        We only return the OUTGOING picking (or the dispatch picking in
+        multi-step setups) — those are the ones that physically left the
+        warehouse to the customer / courier. Returning intermediate Pick or
+        Pack steps would just shuffle stock around inside the warehouse.
+        """
+        self.ensure_one()
+        # Pick the outgoing picking that was validated. If none, take the
+        # most recently done picking.
+        candidates = pickings.filtered(lambda p: p.state == 'done')
+        outgoing_done = candidates.filtered(lambda p: p.picking_type_code == 'outgoing')
+        target_pickings = outgoing_done or candidates
+        if not target_pickings:
+            return
+
+        ReturnWizard = self.env['stock.return.picking']
+        for src in target_pickings:
+            # Skip if a return for this picking already exists
+            if src.search_count([('origin', 'ilike', src.name), ('picking_type_id.code', '=', 'incoming'), ('state', '!=', 'cancel')]):
+                self.message_post(
+                    body='Return picking already exists for <b>%s</b>, skipping.' % src.name
+                )
+                continue
+            try:
+                wizard = ReturnWizard.with_context(
+                    active_id=src.id,
+                    active_ids=src.ids,
+                    active_model='stock.picking',
+                ).create({})
+                # Trigger default population of return-move lines
+                if hasattr(wizard, '_compute_moves_locations'):
+                    wizard._compute_moves_locations()
+                # Manually populate lines if still empty (some Odoo versions)
+                if not wizard.product_return_moves:
+                    moves = []
+                    for m in src.move_ids.filtered(lambda mv: mv.state == 'done'):
+                        moves.append((0, 0, {
+                            'product_id': m.product_id.id,
+                            'quantity': m.product_uom_qty,
+                            'move_id': m.id,
+                            'uom_id': m.product_uom.id,
+                        }))
+                    if moves:
+                        wizard.product_return_moves = moves
+                action = wizard.action_create_returns() if hasattr(wizard, 'action_create_returns') else wizard.create_returns()
+                new_pid = (action or {}).get('res_id') if isinstance(action, dict) else None
+                new_pick = self.env['stock.picking'].browse(new_pid) if new_pid else self.env['stock.picking']
+                if new_pick:
+                    self.message_post(
+                        body='Return picking <b>%s</b> created from <b>%s</b> — receive goods back to stock.'
+                             % (new_pick.name, src.name)
+                    )
+                else:
+                    self.message_post(
+                        body='Return wizard ran for <b>%s</b> but did not return a picking id.' % src.name
+                    )
+            except Exception as exc:
+                _logger.warning(
+                    'Accurate: failed to create return picking for %s: %s', src.name, exc
+                )
+                self.message_post(
+                    body='<b>Warning:</b> Could not auto-create return picking for '
+                         '<b>%s</b>. Please create it manually. Error: %s'
+                         % (src.name, exc)
+                )
 
     def _reverse_invoice_if_any(self, reason='Shipment reversed'):
         """If an invoice was created for this shipment, reverse it sensibly:

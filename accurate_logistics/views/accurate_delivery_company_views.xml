@@ -150,6 +150,12 @@
                      options="{'no_create': True}"/>
             </group>
           </group>
+          <group string="Cancel / Return Behavior">
+            <group>
+              <field name="auto_cancel_pickings"/>
+              <field name="auto_create_return_picking"/>
+            </group>
+          </group>
 
           <notebook>
 

@@ -107,6 +107,22 @@ class AccurateDeliveryCompany(models.Model):
         help='Comma-separated codes from Accurate that mean the shipment was '
              'cancelled. Default: RJCT (Rejected) and CANCELLED.',
     )
+    auto_cancel_pickings = fields.Boolean(
+        'Auto-cancel pending pickings',
+        default=True,
+        help='When a shipment is cancelled or returned, automatically cancel '
+             'any linked pickings that are NOT yet validated (state in '
+             "draft / waiting / confirmed / assigned). Set to False to handle "
+             'pickings manually.',
+    )
+    auto_create_return_picking = fields.Boolean(
+        'Auto-create return picking',
+        default=True,
+        help='When a shipment is cancelled or returned and a delivery picking '
+             'was already validated (state=done), automatically spawn a return '
+             'picking to bring the goods back into stock. Set to False if you '
+             'prefer to create returns manually.',
+    )
     default_service_id = fields.Many2one(
         'accurate.service',
         string='Default Shipping Service',
