@@ -44,6 +44,12 @@
             action="accurate_service_action"
             sequence="40"/>
 
+  <menuitem id="accurate_cancellation_reason_menu"
+            name="Cancellation Reasons"
+            parent="accurate_config_menu"
+            action="accurate_cancellation_reason_action"
+            sequence="50"/>
+
   <!-- Settings shortcut -->
   <menuitem id="accurate_settings_menu"
             name="Settings"

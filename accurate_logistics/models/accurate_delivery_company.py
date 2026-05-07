@@ -90,8 +90,22 @@ class AccurateDeliveryCompany(models.Model):
     )
     delivered_status_codes = fields.Char(
         'Delivered Status Codes',
-        default='DEL,DLV,DELIVERED',
-        help='Comma-separated codes from Accurate that mean "Delivered" (triggers invoice+payment).',
+        default='DTR,DEL,DLV,DELIVERED',
+        help='Comma-separated codes from Accurate that mean "Delivered" '
+             '(triggers invoice + COD payment). Default: DTR (Delivered To Recipient).',
+    )
+    returned_status_codes = fields.Char(
+        'Returned Status Codes',
+        default='RTRN',
+        help='Comma-separated codes from Accurate that mean the shipment was '
+             'returned to sender. Triggers credit-note / cancel-invoice flow. '
+             'Default: RTRN.',
+    )
+    cancelled_status_codes = fields.Char(
+        'Cancelled Status Codes',
+        default='RJCT,CANCELLED',
+        help='Comma-separated codes from Accurate that mean the shipment was '
+             'cancelled. Default: RJCT (Rejected) and CANCELLED.',
     )
     default_service_id = fields.Many2one(
         'accurate.service',
@@ -476,6 +490,31 @@ class AccurateDeliveryCompany(models.Model):
         self.ensure_one()
         self.write({'zone_ids': [(5,)], 'subzone_ids': [(5,)]})
 
+    def action_sync_cancellation_reasons(self):
+        """Sync the master list of cancellation reasons from the API."""
+        self.ensure_one()
+        try:
+            reasons = self._al_list_cancellation_reasons()
+        except Exception as exc:
+            raise UserError(
+                'Failed to fetch cancellation reasons from Accurate Logistics:\n%s' % exc
+            )
+        result = self.env['accurate.cancellation.reason']._upsert_from_api(reasons)
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': 'Cancellation Reasons Synced',
+                'message': '%d created, %d updated. Total reasons: %d.' % (
+                    result.get('created', 0),
+                    result.get('updated', 0),
+                    self.env['accurate.cancellation.reason'].search_count([]),
+                ),
+                'type': 'success',
+                'sticky': False,
+            },
+        }
+
     # ── Smart button actions ──────────────────────────────────────────────────
 
     def action_view_zones(self):
@@ -513,4 +552,12 @@ class AccurateDeliveryCompany(models.Model):
 
     def _is_delivered_code(self, status_code):
         codes = [c.strip().upper() for c in (self.delivered_status_codes or '').split(',') if c.strip()]
+        return (status_code or '').upper() in codes
+
+    def _is_returned_code(self, status_code):
+        codes = [c.strip().upper() for c in (self.returned_status_codes or '').split(',') if c.strip()]
+        return (status_code or '').upper() in codes
+
+    def _is_cancelled_code(self, status_code):
+        codes = [c.strip().upper() for c in (self.cancelled_status_codes or '').split(',') if c.strip()]
         return (status_code or '').upper() in codes

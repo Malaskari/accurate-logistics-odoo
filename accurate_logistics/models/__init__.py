@@ -2,6 +2,7 @@ from . import accurate_api_mixin
 from . import accurate_branch
 from . import accurate_zone
 from . import accurate_service
+from . import accurate_cancellation_reason
 from . import accurate_delivery_company
 from . import accurate_shipment_product
 from . import accurate_shipment

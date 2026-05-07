@@ -284,6 +284,42 @@ class AccurateApiMixin(models.AbstractModel):
         data = self._al_request(query)
         return data.get('listShipmentTypesDropdown') or []
 
+    def _al_list_cancellation_reasons(self):
+        """Pull the cancellation-reason master data from the Accurate API."""
+        query = """
+            query {
+                listCancellationReasonsDropdown {
+                    id
+                    code
+                    name
+                }
+            }
+        """
+        data = self._al_request(query)
+        return data.get('listCancellationReasonsDropdown') or []
+
+    def _al_cancel_shipments(self, shipment_api_ids, cancel=True):
+        """Call the bulk cancelShipments mutation.
+
+        Args:
+            shipment_api_ids: list[int] — Accurate side ids of shipments to cancel.
+            cancel: True to cancel, False to un-cancel (the API supports toggling).
+        """
+        if not shipment_api_ids:
+            return None
+        mutation = """
+            mutation CancelShipments($input: CancelShipmentsInput!) {
+                cancelShipments(input: $input)
+            }
+        """
+        data = self._al_request(mutation, {
+            'input': {
+                'id': [int(x) for x in shipment_api_ids],
+                'cancel': bool(cancel),
+            }
+        })
+        return data.get('cancelShipments')
+
     def _al_calculate_fees(self, fee_input):
         """fee_input: dict matching CalculateShipmentFeesInput."""
         query = """

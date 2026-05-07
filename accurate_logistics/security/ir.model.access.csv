@@ -11,3 +11,6 @@ access_accurate_shipment_user,accurate.shipment user,model_accurate_shipment,bas
 access_accurate_shipment_manager,accurate.shipment manager,model_accurate_shipment,base.group_system,1,1,1,1
 access_accurate_shipment_product_user,accurate.shipment.product user,model_accurate_shipment_product,base.group_user,1,1,1,1
 access_accurate_calculate_fees_wizard,accurate.calculate.fees.wizard,model_accurate_calculate_fees_wizard,base.group_user,1,1,1,1
+access_accurate_cancellation_reason_user,accurate.cancellation.reason user,model_accurate_cancellation_reason,base.group_user,1,0,0,0
+access_accurate_cancellation_reason_manager,accurate.cancellation.reason manager,model_accurate_cancellation_reason,base.group_system,1,1,1,1
+access_accurate_cancel_shipment_wizard,accurate.cancel.shipment.wizard,model_accurate_cancel_shipment_wizard,base.group_user,1,1,1,1

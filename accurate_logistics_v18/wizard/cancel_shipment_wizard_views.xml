@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+  <record id="cancel_shipment_wizard_form" model="ir.ui.view">
+    <field name="name">accurate.cancel.shipment.wizard.form</field>
+    <field name="model">accurate.cancel.shipment.wizard</field>
+    <field name="arch" type="xml">
+      <form string="Cancel Shipment">
+        <sheet>
+          <group>
+            <field name="shipment_id" readonly="1"/>
+            <field name="delivery_company_id"/>
+          </group>
+          <group string="Cancellation Reason">
+            <field name="reason_id"
+                   options="{'no_create': True}"
+                   placeholder="Pick a reason from the synced list…"/>
+            <field name="notes" placeholder="Internal notes (optional)…"/>
+          </group>
+          <div class="alert alert-warning" role="alert">
+            <strong>This will:</strong>
+            <ul class="mb-0">
+              <li>Call <code>cancelShipments</code> on the Accurate Logistics API.</li>
+              <li>Mark the shipment as <b>Cancelled</b> in Odoo.</li>
+              <li>Reverse the COD invoice (credit-note if posted, cancel if draft).</li>
+              <li>Reverse the shipping-fee expense entry if one was booked.</li>
+            </ul>
+            <strong>سيؤدي ذلك إلى:</strong>
+            <ul class="mb-0">
+              <li>إلغاء الشحنة في أكيوريت لوجيستكس.</li>
+              <li>عكس الفاتورة وإصدار إشعار دائن إذا كانت معتمدة.</li>
+              <li>عكس قيد مصروف الشحن إذا تم تسجيله.</li>
+            </ul>
+          </div>
+        </sheet>
+        <footer>
+          <button name="action_cancel_now"
+                  string="Cancel Shipment / إلغاء الشحنة"
+                  type="object"
+                  class="btn-danger"/>
+          <button special="cancel"
+                  string="Close / إغلاق"
+                  class="btn-secondary"/>
+        </footer>
+      </form>
+    </field>
+  </record>
+
+</odoo>

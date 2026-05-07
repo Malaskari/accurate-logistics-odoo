@@ -47,6 +47,10 @@
                   class="btn-secondary"
                   confirm="This will unlink all zones from this company (zones are not deleted). Continue?"
                   invisible="zone_count == 0"/>
+          <button name="action_sync_cancellation_reasons"
+                  string="Sync Cancellation Reasons"
+                  type="object"
+                  class="btn-secondary"/>
         </header>
 
         <sheet>
@@ -138,8 +142,10 @@
                      options="{'no_create': True}"
                      placeholder="Used when 'Shipping Fee Included in Price'…"/>
             </group>
-            <group string="Delivery Status">
+            <group string="Status Codes">
               <field name="delivered_status_codes"/>
+              <field name="returned_status_codes"/>
+              <field name="cancelled_status_codes"/>
               <field name="default_service_id"
                      options="{'no_create': True}"/>
             </group>

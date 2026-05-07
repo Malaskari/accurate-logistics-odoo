@@ -7,8 +7,9 @@
     <field name="model">accurate.shipment</field>
     <field name="arch" type="xml">
       <list string="Shipments"
-            decoration-success="state == 'sent'"
-            decoration-danger="state == 'error'"
+            decoration-success="state == 'delivered'"
+            decoration-info="state == 'sent'"
+            decoration-danger="state in ('error', 'returned', 'cancelled')"
             decoration-muted="state == 'draft'">
         <field name="name"/>
         <field name="code"/>
@@ -20,8 +21,9 @@
         <field name="api_status_name" string="API Status"/>
         <field name="fee_total" string="Total Fees"/>
         <field name="state" widget="badge"
-               decoration-success="state == 'sent'"
-               decoration-danger="state == 'error'"
+               decoration-success="state == 'delivered'"
+               decoration-info="state == 'sent'"
+               decoration-danger="state in ('error', 'returned', 'cancelled')"
                decoration-warning="state == 'draft'"/>
         <field name="date"/>
       </list>
@@ -40,11 +42,16 @@
                   string="Send to Accurate Logistics"
                   type="object"
                   class="btn-primary"
-                  invisible="state == 'sent'"/>
+                  invisible="state in ('sent', 'delivered', 'returned', 'cancelled')"/>
           <button name="action_sync_status"
                   string="Sync Status"
                   type="object"
-                  invisible="state != 'sent'"/>
+                  invisible="state not in ('sent', 'delivered')"/>
+          <button name="action_open_cancel_wizard"
+                  string="Cancel Shipment"
+                  type="object"
+                  class="btn-danger"
+                  invisible="state not in ('sent', 'delivered')"/>
           <button name="action_mark_delivered"
                   string="Mark as Delivered (Test)"
                   type="object"
@@ -67,7 +74,8 @@
                   string="Reset to Draft"
                   type="object"
                   invisible="state != 'error'"/>
-          <field name="state" widget="statusbar" statusbar_visible="draft,sent"/>
+          <field name="state" widget="statusbar"
+                 statusbar_visible="draft,sent,delivered"/>
         </header>
 
         <sheet>
@@ -136,7 +144,15 @@
             <group>
               <field name="invoice_id" readonly="1"/>
               <field name="payment_id" readonly="1"/>
+              <field name="expense_move_id" readonly="1"
+                     invisible="not expense_move_id"/>
             </group>
+          </group>
+
+          <!-- Cancellation -->
+          <group string="Cancellation" invisible="state not in ('cancelled', 'returned')">
+            <field name="cancellation_reason_id" readonly="1"/>
+            <field name="cancellation_notes" readonly="1"/>
           </group>
 
           <notebook>
@@ -270,6 +286,9 @@
         <field name="delivery_company_id"/>
         <filter string="Draft" name="draft" domain="[('state','=','draft')]"/>
         <filter string="Sent" name="sent" domain="[('state','=','sent')]"/>
+        <filter string="Delivered" name="delivered" domain="[('state','=','delivered')]"/>
+        <filter string="Returned" name="returned" domain="[('state','=','returned')]"/>
+        <filter string="Cancelled" name="cancelled" domain="[('state','=','cancelled')]"/>
         <filter string="Error" name="error" domain="[('state','=','error')]"/>
         <filter string="Not Invoiced" name="not_invoiced"
                 domain="[('invoice_id','=',False),('state','=','sent')]"/>

@@ -51,8 +51,31 @@ class AccurateShipment(models.Model):
     # ── State ─────────────────────────────────────────────────────────────────
 
     state = fields.Selection(
-        [('draft', 'Draft'), ('sent', 'Sent'), ('error', 'Error')],
+        [
+            ('draft', 'Draft'),
+            ('sent', 'Sent'),
+            ('delivered', 'Delivered'),
+            ('returned', 'Returned'),
+            ('cancelled', 'Cancelled'),
+            ('error', 'Error'),
+        ],
         default='draft', required=True, copy=False, tracking=True, index=True,
+    )
+
+    # Track journal entries created by the shipping-fee booking so we can
+    # reverse them if the shipment is later returned or cancelled.
+    expense_move_id = fields.Many2one(
+        'account.move',
+        string='Shipping Expense Entry',
+        readonly=True, copy=False,
+    )
+    cancellation_reason_id = fields.Many2one(
+        'accurate.cancellation.reason',
+        string='Cancellation Reason',
+        readonly=True, copy=False,
+    )
+    cancellation_notes = fields.Text(
+        'Cancellation Notes', readonly=True, copy=False,
     )
     api_status_code = fields.Char('API Status Code', readonly=True, copy=False)
     api_status_name = fields.Char('API Status', readonly=True, copy=False, tracking=True)
@@ -345,9 +368,15 @@ class AccurateShipment(models.Model):
             body='Webhook: status → <b>%s</b> (%s)' % (status_name or status_code, status_code)
         )
 
-        # Trigger COD invoice + payment on delivery
-        if shipment.delivery_company_id and shipment.delivery_company_id._is_delivered_code(status_code):
-            shipment._on_delivered()
+        # Dispatch to the right flow based on status family
+        company = shipment.delivery_company_id
+        if company:
+            if company._is_delivered_code(status_code):
+                shipment._on_delivered()
+            elif company._is_returned_code(status_code):
+                shipment._on_returned()
+            elif company._is_cancelled_code(status_code):
+                shipment._on_cancelled()
 
         return {'success': True, 'code': code, 'status': status_code}
 
@@ -363,6 +392,11 @@ class AccurateShipment(models.Model):
         if self.invoice_id:
             _logger.info('Accurate: shipment %s already has invoice %s, skipping.', self.name, self.invoice_id.name)
             return
+
+        # Mark as delivered first — even if invoicing fails we still
+        # want the state to reflect the courier's truth.
+        if self.state != 'delivered':
+            self.state = 'delivered'
 
         sale = self.sale_id
         delivery_company = self.delivery_company_id
@@ -534,6 +568,8 @@ class AccurateShipment(models.Model):
                 'Accurate: shipping-expense entry %s posted failed for %s: %s',
                 move.name, self.name, exc,
             )
+        # Save the move so we can reverse it later if the shipment is returned
+        self.expense_move_id = move.id
         self.message_post(
             body=(
                 'Shipping fee <b>%.2f %s</b> booked as expense to '
@@ -541,6 +577,145 @@ class AccurateShipment(models.Model):
             ) % (fee, currency.symbol or currency.name,
                  company.expense_account_id.display_name, move.name)
         )
+
+    # ── Returned: reverse COD invoice + shipping expense ──────────────────────
+
+    def _on_returned(self):
+        """Webhook/cron handler when the shipment is returned to sender (RTRN).
+        - Set state = 'returned'.
+        - If invoice was already created and posted/paid → make a credit note (refund).
+        - If invoice was created but still draft → cancel it.
+        - If shipping-fee expense entry was booked → reverse it.
+        - Notify the sale order's chatter.
+        """
+        self.ensure_one()
+        if self.state == 'returned':
+            return
+        self.state = 'returned'
+        self.message_post(
+            body='<b>Returned</b> — shipment was returned to sender. '
+                 'Reversing COD invoice / payment / shipping-expense if needed.'
+        )
+
+        self._reverse_invoice_if_any(reason='Shipment returned to sender')
+        self._reverse_expense_if_any(reason='Shipment returned to sender')
+
+        if self.sale_id:
+            self.sale_id.message_post(
+                body='Accurate Logistics: shipment <b>%s</b> was <b>returned</b>. '
+                     'Any COD invoice has been reversed.' % (self.code or self.name)
+            )
+
+    # ── Cancelled: reverse anything that was booked ───────────────────────────
+
+    def _on_cancelled(self):
+        """Webhook/cron/manual handler when the shipment is cancelled (RJCT
+        or CANCELLED in the API).
+        - Set state = 'cancelled'.
+        - Reverse invoice / shipping-expense if they exist.
+        - Don't fire the COD flow if it hadn't fired yet.
+        """
+        self.ensure_one()
+        if self.state == 'cancelled':
+            return
+        self.state = 'cancelled'
+        self.message_post(
+            body='<b>Cancelled</b> — shipment was cancelled. '
+                 'Reversing COD invoice / payment / shipping-expense if needed.'
+        )
+
+        self._reverse_invoice_if_any(reason='Shipment cancelled')
+        self._reverse_expense_if_any(reason='Shipment cancelled')
+
+        if self.sale_id:
+            self.sale_id.message_post(
+                body='Accurate Logistics: shipment <b>%s</b> was <b>cancelled</b>. '
+                     'Any COD invoice has been reversed.' % (self.code or self.name)
+            )
+
+    # ── Reversal helpers (shared between returned + cancelled flows) ──────────
+
+    def _reverse_invoice_if_any(self, reason='Shipment reversed'):
+        """If an invoice was created for this shipment, reverse it sensibly:
+          - Posted/paid invoice → create a customer credit note (account.move.reversal)
+          - Draft invoice → button_cancel
+          - Already cancelled → no-op
+        """
+        self.ensure_one()
+        if not self.invoice_id:
+            return
+        invoice = self.invoice_id
+        if invoice.state == 'cancel':
+            return
+        if invoice.state == 'draft':
+            try:
+                invoice.button_cancel()
+                self.message_post(body='Cancelled draft invoice <b>%s</b>.' % invoice.name)
+            except Exception as exc:
+                _logger.warning(
+                    'Accurate: failed to cancel draft invoice %s: %s', invoice.name, exc,
+                )
+            return
+        # Posted invoice → create credit note
+        try:
+            wizard = self.env['account.move.reversal'].with_context(
+                active_model='account.move', active_ids=invoice.ids,
+            ).create({
+                'reason': reason,
+                'journal_id': invoice.journal_id.id,
+            })
+            # The wizard supports both 'modify' (cancel + draft replacement) and
+            # plain reversal. We want the latter for cancellation/return.
+            if 'reverse_method' in wizard._fields:
+                wizard.reverse_method = 'cancel'
+            action = wizard.refund_moves() if hasattr(wizard, 'refund_moves') else \
+                     wizard.reverse_moves()
+            credit_id = (action or {}).get('res_id') if isinstance(action, dict) else None
+            credit = self.env['account.move'].browse(credit_id) if credit_id else self.env['account.move']
+            if credit:
+                self.message_post(
+                    body='Credit note <b>%s</b> created (reverses invoice <b>%s</b>).'
+                         % (credit.name or '—', invoice.name)
+                )
+        except Exception as exc:
+            _logger.warning(
+                'Accurate: failed to reverse invoice %s for shipment %s: %s',
+                invoice.name, self.name, exc,
+            )
+            self.message_post(
+                body='<b>Warning:</b> Could not auto-reverse invoice <b>%s</b>. '
+                     'Please review manually. Error: %s' % (invoice.name, exc)
+            )
+
+    def _reverse_expense_if_any(self, reason='Shipment reversed'):
+        """Reverse the shipping-fee expense entry (if any) by creating a
+        mirror journal entry.
+        """
+        self.ensure_one()
+        if not self.expense_move_id or self.expense_move_id.state == 'cancel':
+            return
+        try:
+            reversal = self.expense_move_id._reverse_moves(
+                default_values_list=[{
+                    'date': fields.Date.today(),
+                    'ref': '%s — %s' % (reason, self.expense_move_id.ref or ''),
+                }],
+                cancel=True,
+            )
+            self.message_post(
+                body='Shipping-expense entry <b>%s</b> reversed by <b>%s</b>.'
+                     % (self.expense_move_id.name, reversal[:1].name or '—')
+            )
+        except Exception as exc:
+            _logger.warning(
+                'Accurate: failed to reverse expense entry %s for shipment %s: %s',
+                self.expense_move_id.name, self.name, exc,
+            )
+            self.message_post(
+                body='<b>Warning:</b> Could not auto-reverse shipping-expense '
+                     'entry <b>%s</b>. Please review manually.'
+                     % self.expense_move_id.name
+            )
 
     # ── Other actions ─────────────────────────────────────────────────────────
 
@@ -599,6 +774,41 @@ class AccurateShipment(models.Model):
             rec.message_post(body='<b>Test reset:</b> invoice + payment links cleared.')
         return True
 
+    def action_open_cancel_wizard(self):
+        """Open the cancel-shipment wizard. The wizard collects a cancellation
+        reason and calls the Accurate API + the local _on_cancelled() flow.
+        """
+        self.ensure_one()
+        if self.state in ('cancelled', 'returned'):
+            raise UserError(
+                'Shipment is already in state "%s" — nothing to cancel.\n'
+                'الشحنة بالفعل في حالة "%s".' % (self.state, self.state)
+            )
+        if not self.api_id:
+            raise UserError(
+                'Shipment has not been sent to Accurate Logistics yet.\n'
+                'الشحنة لم يتم إرسالها إلى أكيوريت لوجيستكس بعد.'
+            )
+        # Make sure cancellation reasons are available — guide the user if not.
+        if not self.env['accurate.cancellation.reason'].search_count([]):
+            raise UserError(
+                'No cancellation reasons synced yet.\n'
+                'Open the Delivery Company form and click "Sync Cancellation '
+                'Reasons" first.\n\n'
+                'لم تتم مزامنة أسباب الإلغاء بعد. افتح شركة الشحن واضغط على '
+                'زر "مزامنة أسباب الإلغاء".'
+            )
+        return {
+            'type': 'ir.actions.act_window',
+            'name': 'Cancel Shipment',
+            'res_model': 'accurate.cancel.shipment.wizard',
+            'view_mode': 'form',
+            'target': 'new',
+            'context': {
+                'default_shipment_id': self.id,
+            },
+        }
+
     def action_mark_delivered(self):
         """Manually trigger the 'delivered' flow (invoice + COD payment + reconcile)
         without waiting for the webhook. Useful for testing the full flow end-to-end.
@@ -654,22 +864,30 @@ class AccurateShipment(models.Model):
 
     @api.model
     def cron_sync_statuses(self):
-        pending = self.search([('state', '=', 'sent'), ('api_id', '!=', False)])
+        # Sync any non-terminal shipment so we also catch returns and
+        # cancellations triggered after delivery (e.g. RTRN reached after DTR).
+        pending = self.search([
+            ('state', 'in', ('sent', 'delivered')),
+            ('api_id', '!=', False),
+        ])
         _logger.info('Accurate Logistics cron: syncing %d shipments.', len(pending))
         for rec in pending:
             try:
                 if not rec.delivery_company_id:
                     continue
                 data = rec.delivery_company_id._al_get_shipment(api_id=rec.api_id, code=rec.code)
-                if data:
-                    old_code = rec.api_status_code
-                    rec._apply_api_response(data)
-                    if (
-                        rec.api_status_code != old_code
-                        and rec.delivery_company_id
-                        and rec.delivery_company_id._is_delivered_code(rec.api_status_code)
-                        and not rec.invoice_id
-                    ):
-                        rec._on_delivered()
+                if not data:
+                    continue
+                old_code = rec.api_status_code
+                rec._apply_api_response(data)
+                if rec.api_status_code == old_code:
+                    continue
+                company = rec.delivery_company_id
+                if company._is_delivered_code(rec.api_status_code) and not rec.invoice_id:
+                    rec._on_delivered()
+                elif company._is_returned_code(rec.api_status_code):
+                    rec._on_returned()
+                elif company._is_cancelled_code(rec.api_status_code):
+                    rec._on_cancelled()
             except Exception as exc:
                 _logger.warning('Accurate cron: failed for %s: %s', rec.name, exc)
