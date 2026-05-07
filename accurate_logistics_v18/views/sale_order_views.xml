@@ -22,7 +22,7 @@
         </button>
       </xpath>
 
-      <!-- Show Shipment Code + Status under Payment Terms on the form -->
+      <!-- Show Shipment Code + Status + Dispatch fields under Payment Terms on the form -->
       <xpath expr="//field[@name='payment_term_id']" position="after">
         <field name="accurate_shipment_code"
                widget="badge"
@@ -31,10 +31,10 @@
                invisible="not accurate_shipment_code"/>
         <field name="accurate_status_name"
                widget="badge"
-               decoration-success="accurate_status_code in ('DEL','DLV','DELIVERED','DELIVERY')"
-               decoration-warning="accurate_status_code in ('SENT','IN_TRANSIT','OUT_FOR_DELIVERY','PICKED','OUT')"
-               decoration-danger="accurate_status_code in ('FAILED','CANCELLED','CANCELED','RETURNED','RTN','REJECTED')"
-               decoration-info="accurate_status_code and accurate_status_code not in ('DEL','DLV','DELIVERED','DELIVERY','SENT','IN_TRANSIT','OUT_FOR_DELIVERY','PICKED','OUT','FAILED','CANCELLED','CANCELED','RETURNED','RTN','REJECTED')"
+               decoration-success="accurate_status_code in ('DEL','DLV','DELIVERED','DELIVERY','DTR')"
+               decoration-warning="accurate_status_code in ('SENT','IN_TRANSIT','OUT_FOR_DELIVERY','PICKED','OUT','OTD','STD')"
+               decoration-danger="accurate_status_code in ('FAILED','CANCELLED','CANCELED','RETURNED','RTN','REJECTED','RJCT','RTRN')"
+               decoration-info="accurate_status_code and accurate_status_code not in ('DEL','DLV','DELIVERED','DELIVERY','DTR','SENT','IN_TRANSIT','OUT_FOR_DELIVERY','PICKED','OUT','OTD','STD','FAILED','CANCELLED','CANCELED','RETURNED','RTN','REJECTED','RJCT','RTRN')"
                readonly="1"
                invisible="not accurate_status_name"/>
         <field name="accurate_status_code" invisible="1"/>
@@ -42,6 +42,24 @@
                widget="url"
                readonly="1"
                invisible="not accurate_tracking_url"/>
+        <!-- Dispatch fields here on the main form for easy access.
+             Become readonly once a shipment is created. -->
+        <field name="accurate_delivery_company_id"
+               options="{'no_create': True}"
+               readonly="accurate_shipment_count > 0"
+               placeholder="Pick the delivery company first…"/>
+        <field name="accurate_service_id"
+               options="{'no_create': True}"
+               readonly="accurate_shipment_count > 0"
+               placeholder="Default service used if left empty"/>
+        <field name="accurate_recipient_zone_id"
+               options="{'no_create': True}"
+               readonly="not accurate_delivery_company_id or accurate_shipment_count > 0"
+               placeholder="Choose a Delivery Company first"/>
+        <field name="accurate_recipient_subzone_id"
+               options="{'no_create': True}"
+               readonly="not accurate_recipient_zone_id or accurate_shipment_count > 0"
+               placeholder="Choose a Zone first"/>
       </xpath>
 
       <!-- New tab: Accurate Logistics (after "Other Info") -->
