@@ -304,12 +304,18 @@ class AccurateApiMixin(models.AbstractModel):
         Args:
             shipment_api_ids: list[int] — Accurate side ids of shipments to cancel.
             cancel: True to cancel, False to un-cancel (the API supports toggling).
+
+        Returns the list of shipment dicts (id, code, status) the API echoed back.
         """
         if not shipment_api_ids:
-            return None
+            return []
         mutation = """
             mutation CancelShipments($input: CancelShipmentsInput!) {
-                cancelShipments(input: $input)
+                cancelShipments(input: $input) {
+                    id
+                    code
+                    status { code name }
+                }
             }
         """
         data = self._al_request(mutation, {
@@ -318,7 +324,7 @@ class AccurateApiMixin(models.AbstractModel):
                 'cancel': bool(cancel),
             }
         })
-        return data.get('cancelShipments')
+        return data.get('cancelShipments') or []
 
     def _al_calculate_fees(self, fee_input):
         """fee_input: dict matching CalculateShipmentFeesInput."""
