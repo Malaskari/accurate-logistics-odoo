@@ -152,7 +152,14 @@ class SaleOrder(models.Model):
             if order.accurate_openable_code:
                 vals['accurate_openable_code'] = order.accurate_openable_code
             if vals:
-                order.picking_ids.filtered(
-                    lambda p: p.picking_type_code == 'outgoing'
-                ).write(vals)
+                # Propagate to the FIRST step of the delivery chain. In a
+                # 2/3-step warehouse the outgoing picking may not exist at
+                # this point (it's created lazily when the Pick is validated),
+                # so we target the Pick step instead. As a fallback, write to
+                # ALL pickings linked to the SO so nothing is missed.
+                dispatch_pickings = order.picking_ids.filtered(
+                    lambda p: p._accurate_is_first_in_delivery_chain()
+                )
+                target = dispatch_pickings or order.picking_ids
+                target.write(vals)
         return res

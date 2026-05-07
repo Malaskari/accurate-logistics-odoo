@@ -91,41 +91,51 @@ class StockPicking(models.Model):
              'FIRST picking in the chain.',
     )
 
-    @api.depends('picking_type_code', 'move_ids', 'move_ids.move_orig_ids', 'move_ids.move_dest_ids')
+    @api.depends('picking_type_code', 'picking_type_id', 'location_dest_id')
     def _compute_accurate_is_dispatch_step(self):
         for rec in self:
             rec.accurate_is_dispatch_step = rec._accurate_is_first_in_delivery_chain()
 
     def _accurate_is_first_in_delivery_chain(self):
-        """A picking is the 'first step' if:
-          - It has NO predecessor moves (no `move_orig_ids`), AND
-          - Its chain of downstream moves eventually ends in an outgoing
-            picking (so internal pickings unrelated to delivery are excluded).
+        """Decide whether THIS picking is the 'first step' of the delivery
+        chain — i.e. the one where the Accurate Logistics shipment should be
+        created.
+
+        We use the warehouse's `delivery_steps` setting (rather than walking
+        move chains, because in Odoo 19 the Ship picking is often created
+        lazily when the Pick is validated, so move_dest_ids is empty at the
+        time the user is looking at the Pick form):
+
+          - `ship_only` (1-step): the outgoing picking is the dispatch.
+          - `pick_ship` (2-step): the picking that ends at the warehouse's
+                                   Output location is the dispatch.
+          - `pick_pack_ship` (3-step): the picking that ends at the
+                                       warehouse's Packing location is the
+                                       dispatch (NOT Pack, NOT Ship).
         """
         self.ensure_one()
-        # No predecessors: this is the first step
-        has_predecessor = any(m.move_orig_ids for m in self.move_ids)
-        if has_predecessor:
-            return False
-        # If this is already an outgoing picking, it's a 1-step delivery — show.
-        if self.picking_type_code == 'outgoing':
-            return True
-        # Internal picking: must lead to an outgoing picking somewhere downstream.
-        if self.picking_type_code != 'internal':
-            return False
-        seen = set()
-        moves_to_check = self.move_ids
-        while moves_to_check:
-            next_moves = self.env['stock.move']
-            for m in moves_to_check:
-                if m.id in seen:
-                    continue
-                seen.add(m.id)
-                if m.picking_id and m.picking_id.picking_type_code == 'outgoing':
-                    return True
-                next_moves |= m.move_dest_ids
-            moves_to_check = next_moves
-        return False
+        wh = self.picking_type_id.warehouse_id
+        if not wh:
+            # No warehouse (manual picking, transfer between warehouses, etc.)
+            # → fall back to outgoing pickings only.
+            return self.picking_type_code == 'outgoing'
+
+        steps = wh.delivery_steps
+        if steps == 'ship_only':
+            return self.picking_type_code == 'outgoing'
+
+        if steps == 'pick_ship':
+            # Dispatch = picking that goes Stock → Output
+            output_loc = getattr(wh, 'wh_output_stock_loc_id', False)
+            return bool(output_loc) and self.location_dest_id == output_loc
+
+        if steps == 'pick_pack_ship':
+            # Dispatch = picking that goes Stock → Packing
+            pack_loc = getattr(wh, 'wh_pack_stock_loc_id', False)
+            return bool(pack_loc) and self.location_dest_id == pack_loc
+
+        # Unknown delivery_steps value → safe default
+        return self.picking_type_code == 'outgoing'
 
     # ── Validation hook ───────────────────────────────────────────────────────
 
