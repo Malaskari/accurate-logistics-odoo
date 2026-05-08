@@ -596,10 +596,10 @@ class AccurateShipment(models.Model):
             'api_status_code': 'RTRN',
             'api_status_name': 'Returned',
         })
-        self.message_post(
-            body='<b>Returned</b> — shipment was returned to sender. '
-                 'Reversing COD invoice / payment / shipping-expense, '
-                 'handling pickings, and cancelling the Sale Order.'
+        self._chatter(
+            '<b>Returned</b> — shipment was returned to sender. '
+            'Reversing COD invoice / payment / shipping-expense, '
+            'handling pickings, and cancelling the Sale Order.'
         )
 
         reason = 'Shipment returned to sender'
@@ -627,13 +627,6 @@ class AccurateShipment(models.Model):
         if company and getattr(company, 'auto_create_return_picking', True):
             self._create_return_for_done_pickings(captured, reason)
 
-        if self.sale_id:
-            self.sale_id.message_post(
-                body='Accurate Logistics: shipment <b>%s</b> was <b>returned</b>. '
-                     'Any COD invoice has been reversed and the order cancelled.'
-                     % (self.code or self.name)
-            )
-
     # ── Cancelled: reverse anything that was booked ───────────────────────────
 
     def _on_cancelled(self):
@@ -652,10 +645,10 @@ class AccurateShipment(models.Model):
             'api_status_code': 'CANCELLED',
             'api_status_name': 'Cancelled',
         })
-        self.message_post(
-            body='<b>Cancelled</b> — shipment was cancelled. '
-                 'Reversing COD invoice / payment / shipping-expense, '
-                 'handling pickings, and cancelling the Sale Order.'
+        self._chatter(
+            '<b>Cancelled</b> — shipment was cancelled. '
+            'Reversing COD invoice / payment / shipping-expense, '
+            'handling pickings, and cancelling the Sale Order.'
         )
 
         reason = 'Shipment cancelled'
@@ -681,14 +674,23 @@ class AccurateShipment(models.Model):
         if company and getattr(company, 'auto_create_return_picking', True):
             self._create_return_for_done_pickings(captured, reason)
 
-        if self.sale_id:
-            self.sale_id.message_post(
-                body='Accurate Logistics: shipment <b>%s</b> was <b>cancelled</b>. '
-                     'Any COD invoice has been reversed and the order cancelled.'
-                     % (self.code or self.name)
-            )
-
     # ── Reversal helpers (shared between returned + cancelled flows) ──────────
+
+    def _chatter(self, body):
+        """Post a chatter message on this shipment AND mirror it to the linked
+        Sale Order so the salesperson sees the full reverse-flow timeline
+        without having to open the shipment record.
+        """
+        self.ensure_one()
+        self.message_post(body=body)
+        if self.sale_id:
+            try:
+                self.sale_id.message_post(body=body)
+            except Exception as exc:
+                _logger.info(
+                    'Accurate: could not mirror chatter to SO %s: %s',
+                    self.sale_id.name, exc,
+                )
 
     def _cancel_sale_order_if_any(self, reason='Shipment reversed'):
         """Cancel the linked Sale Order so the operations dashboard reflects
@@ -707,29 +709,28 @@ class AccurateShipment(models.Model):
             lambda s: s.state in ('draft', 'sent', 'delivered') and s.id != self.id
         )
         if active_siblings:
-            self.message_post(
-                body='Sale Order <b>%s</b> not cancelled — it has %d other '
-                     'active shipment(s). Cancel them first if you want the '
-                     'order cancelled.' % (sale.name, len(active_siblings))
+            self._chatter(
+                'Sale Order <b>%s</b> not cancelled — it has %d other '
+                'active shipment(s). Cancel them first if you want the '
+                'order cancelled.' % (sale.name, len(active_siblings))
             )
             return
         try:
-            # Standard Odoo SO cancel — handles linked invoices / pickings safely.
-            if hasattr(sale, '_action_cancel'):
-                sale._action_cancel()
-            else:
+            # Odoo 19 prefers action_cancel (public). Older versions used
+            # _action_cancel (private). Try public first.
+            if hasattr(sale, 'action_cancel'):
                 sale.action_cancel()
-            self.message_post(
-                body='Sale Order <b>%s</b> cancelled (%s).' % (sale.name, reason)
-            )
+            elif hasattr(sale, '_action_cancel'):
+                sale._action_cancel()
+            self._chatter('Sale Order <b>%s</b> cancelled (%s).' % (sale.name, reason))
         except Exception as exc:
             _logger.warning(
                 'Accurate: failed to cancel Sale Order %s: %s', sale.name, exc
             )
-            self.message_post(
-                body='<b>Warning:</b> Could not auto-cancel Sale Order '
-                     '<b>%s</b>. Please cancel manually. Error: %s'
-                     % (sale.name, exc)
+            self._chatter(
+                '<b>Warning:</b> Could not auto-cancel Sale Order '
+                '<b>%s</b>. Please cancel manually. Error: %s'
+                % (sale.name, exc)
             )
 
     def _handle_pickings_on_reverse(self, reason='Shipment reversed'):
@@ -785,21 +786,26 @@ class AccurateShipment(models.Model):
         cancelled_names = []
         for p in ordered:
             try:
-                p._action_cancel()
+                # Odoo renamed the cancel method across versions:
+                #   Odoo 19+ : action_cancel (public)
+                #   Odoo 16-18: _action_cancel (private)
+                # Try both, fall back to direct state write as last resort.
+                if hasattr(p, 'action_cancel'):
+                    p.action_cancel()
+                elif hasattr(p, '_action_cancel'):
+                    p._action_cancel()
+                else:
+                    p.write({'state': 'cancel'})
                 cancelled_names.append(p.name)
             except Exception as exc:
                 _logger.warning(
                     'Accurate: failed to cancel picking %s: %s', p.name, exc
                 )
-                self.message_post(
-                    body='<b>Warning:</b> Could not cancel picking <b>%s</b>: %s'
-                         % (p.name, exc)
-                )
+                self._chatter('<b>Warning:</b> Could not cancel picking <b>%s</b>: %s'
+                              % (p.name, exc))
         if cancelled_names:
-            self.message_post(
-                body='Cancelled pending picking(s): <b>%s</b>.'
-                     % ', '.join(cancelled_names)
-            )
+            self._chatter('Cancelled pending picking(s): <b>%s</b>.'
+                          % ', '.join(cancelled_names))
 
     def _create_return_for_done_pickings(self, pickings, reason):
         """For each picking already in 'done' state, spawn a return picking
@@ -859,9 +865,9 @@ class AccurateShipment(models.Model):
                     'uom_id': m.product_uom.id,
                 }))
             if not return_lines:
-                self.message_post(
-                    body='No delivered moves found on <b>%s</b> — return picking '
-                         'would be empty, so skipping.' % src.name
+                self._chatter(
+                    'No delivered moves found on <b>%s</b> — return picking '
+                    'would be empty, so skipping.' % src.name
                 )
                 continue
 
@@ -907,25 +913,25 @@ class AccurateShipment(models.Model):
                                 'Accurate: return picking %s was cancelled and '
                                 'could not be revived: %s', new_pick.name, exc
                             )
-                    self.message_post(
-                        body=('Return picking <b>%s</b> created from <b>%s</b> '
-                              'with %d line(s) — validate it when goods arrive '
-                              'physically.')
-                             % (new_pick.name, src.name, len(return_lines))
+                    self._chatter(
+                        ('Return picking <b>%s</b> created from <b>%s</b> '
+                         'with %d line(s) — validate it when goods arrive '
+                         'physically.')
+                        % (new_pick.name, src.name, len(return_lines))
                     )
                 else:
-                    self.message_post(
-                        body='Return wizard ran for <b>%s</b> but did not return a picking id.'
-                             % src.name
+                    self._chatter(
+                        'Return wizard ran for <b>%s</b> but did not return a picking id.'
+                        % src.name
                     )
             except Exception as exc:
                 _logger.warning(
                     'Accurate: failed to create return picking for %s: %s', src.name, exc
                 )
-                self.message_post(
-                    body='<b>Warning:</b> Could not auto-create return picking for '
-                         '<b>%s</b>. Please create it manually. Error: %s'
-                         % (src.name, exc)
+                self._chatter(
+                    '<b>Warning:</b> Could not auto-create return picking for '
+                    '<b>%s</b>. Please create it manually. Error: %s'
+                    % (src.name, exc)
                 )
 
     def _reverse_invoice_if_any(self, reason='Shipment reversed'):
@@ -943,7 +949,7 @@ class AccurateShipment(models.Model):
         if invoice.state == 'draft':
             try:
                 invoice.button_cancel()
-                self.message_post(body='Cancelled draft invoice <b>%s</b>.' % invoice.name)
+                self._chatter('Cancelled draft invoice <b>%s</b>.' % invoice.name)
             except Exception as exc:
                 _logger.warning(
                     'Accurate: failed to cancel draft invoice %s: %s', invoice.name, exc,
@@ -957,8 +963,6 @@ class AccurateShipment(models.Model):
                 'reason': reason,
                 'journal_id': invoice.journal_id.id,
             })
-            # The wizard supports both 'modify' (cancel + draft replacement) and
-            # plain reversal. We want the latter for cancellation/return.
             if 'reverse_method' in wizard._fields:
                 wizard.reverse_method = 'cancel'
             action = wizard.refund_moves() if hasattr(wizard, 'refund_moves') else \
@@ -966,18 +970,18 @@ class AccurateShipment(models.Model):
             credit_id = (action or {}).get('res_id') if isinstance(action, dict) else None
             credit = self.env['account.move'].browse(credit_id) if credit_id else self.env['account.move']
             if credit:
-                self.message_post(
-                    body='Credit note <b>%s</b> created (reverses invoice <b>%s</b>).'
-                         % (credit.name or '—', invoice.name)
+                self._chatter(
+                    'Credit note <b>%s</b> created (reverses invoice <b>%s</b>).'
+                    % (credit.name or '—', invoice.name)
                 )
         except Exception as exc:
             _logger.warning(
                 'Accurate: failed to reverse invoice %s for shipment %s: %s',
                 invoice.name, self.name, exc,
             )
-            self.message_post(
-                body='<b>Warning:</b> Could not auto-reverse invoice <b>%s</b>. '
-                     'Please review manually. Error: %s' % (invoice.name, exc)
+            self._chatter(
+                '<b>Warning:</b> Could not auto-reverse invoice <b>%s</b>. '
+                'Please review manually. Error: %s' % (invoice.name, exc)
             )
 
     def _reverse_expense_if_any(self, reason='Shipment reversed'):
@@ -995,19 +999,19 @@ class AccurateShipment(models.Model):
                 }],
                 cancel=True,
             )
-            self.message_post(
-                body='Shipping-expense entry <b>%s</b> reversed by <b>%s</b>.'
-                     % (self.expense_move_id.name, reversal[:1].name or '—')
+            self._chatter(
+                'Shipping-expense entry <b>%s</b> reversed by <b>%s</b>.'
+                % (self.expense_move_id.name, reversal[:1].name or '—')
             )
         except Exception as exc:
             _logger.warning(
                 'Accurate: failed to reverse expense entry %s for shipment %s: %s',
                 self.expense_move_id.name, self.name, exc,
             )
-            self.message_post(
-                body='<b>Warning:</b> Could not auto-reverse shipping-expense '
-                     'entry <b>%s</b>. Please review manually.'
-                     % self.expense_move_id.name
+            self._chatter(
+                '<b>Warning:</b> Could not auto-reverse shipping-expense '
+                'entry <b>%s</b>. Please review manually.'
+                % self.expense_move_id.name
             )
 
     # ── Other actions ─────────────────────────────────────────────────────────
