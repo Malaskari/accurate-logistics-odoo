@@ -22,7 +22,7 @@ class SaleOrder(models.Model):
         'accurate.zone',
         string='Recipient Sub-zone',
         # No zone selected → empty list. With zone → only its sub-zones.
-        domain="[('is_subzone', '=', True), ('parent_id', '=', accurate_recipient_zone_id)] if accurate_recipient_zone_id else [('id', '=', 0)]",
+        domain="[('is_subzone', '=', True), ('parent_id', '=', accurate_recipient_zone_id), ('in_price_list', '=', True)] if accurate_recipient_zone_id else [('id', '=', 0)]",
         tracking=True,
         help='Pick a Recipient Zone first — this dropdown then shows only that zone’s sub-zones.',
     )
@@ -229,6 +229,24 @@ class SaleOrder(models.Model):
             lambda p: p._accurate_is_first_in_delivery_chain()
         )[:1]
 
+        # Decide collection rule based on invoice state:
+        #   - No invoice OR invoice not paid → courier collects full amount (COD).
+        #   - Invoice paid (incl. in_payment) → send price=0, paymentTypeCode=PAID.
+        #   - Invoice partially paid → send remaining residual as price.
+        # This lets EzonePay-prepaid orders ship without double-collection.
+        price = self.amount_total
+        payment_type_code = self.accurate_payment_type_code or 'COLC'
+        invoice = self.invoice_ids.filtered(
+            lambda i: i.state == 'posted' and i.move_type == 'out_invoice'
+        )[:1]
+        if invoice:
+            payment_state = invoice.payment_state
+            if payment_state in ('paid', 'in_payment', 'reversed'):
+                price = 0.0
+                payment_type_code = 'PAID'
+            elif payment_state == 'partial':
+                price = invoice.amount_residual
+
         shipment_vals = {
             'sale_id': self.id,
             'picking_id': dispatch.id if dispatch else False,
@@ -240,9 +258,9 @@ class SaleOrder(models.Model):
             'recipient_zone_id': self.accurate_recipient_zone_id.id,
             'recipient_subzone_id': self.accurate_recipient_subzone_id.id,
             'ref_number': self.name,
-            'price': self.amount_total,
+            'price': price,
             'type_code': self.accurate_type_code or 'FDP',
-            'payment_type_code': self.accurate_payment_type_code or 'COLC',
+            'payment_type_code': payment_type_code,
             'price_type_code': self.accurate_price_type_code or 'EXCLD',
             'openable_code': self.accurate_openable_code or 'N',
         }

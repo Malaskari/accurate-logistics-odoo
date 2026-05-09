@@ -95,7 +95,7 @@ class AccurateShipment(models.Model):
     )
     recipient_subzone_id = fields.Many2one(
         'accurate.zone', string='Recipient Sub-zone', required=True,
-        domain="[('is_subzone', '=', True), ('parent_id', '=', recipient_zone_id)] if recipient_zone_id else [('id', '=', 0)]",
+        domain="[('is_subzone', '=', True), ('parent_id', '=', recipient_zone_id), ('in_price_list', '=', True)] if recipient_zone_id else [('id', '=', 0)]",
         tracking=True,
     )
     recipient_latitude = fields.Float('Lat', digits=(10, 7))

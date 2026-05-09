@@ -247,23 +247,12 @@ class AccurateDeliveryCompany(models.Model):
     # ── Zone sync actions ─────────────────────────────────────────────────────
 
     def _al_scope(self):
-        """Build the filter dict using branch/country/service scope set on
-        this company.
-
-        When `default_service_id` is set, the zone filter narrows to ONLY
-        the destinations in that service's price list — i.e. zones the
-        merchant can actually ship to. Without this filter, the API
-        returns Accurate's whole catalogue and dropdowns offer zones the
-        merchant has no rates for, leading to NO_PRICE_LIST_ENTRY errors
-        when the shipment is sent.
-        """
+        """Build the filter dict using branch/country scope set on this company."""
         scope = {}
         if self.api_branch_id:
             scope['branchId'] = self.api_branch_id
         if self.api_country_id:
             scope['countryId'] = self.api_country_id
-        if self.default_service_id and self.default_service_id.api_id:
-            scope['service'] = {'serviceId': self.default_service_id.api_id}
         return scope
 
     def action_sync_zones(self):
@@ -516,6 +505,115 @@ class AccurateDeliveryCompany(models.Model):
         """Remove all zone/subzone links from this company (does not delete zones)."""
         self.ensure_one()
         self.write({'zone_ids': [(5,)], 'subzone_ids': [(5,)]})
+
+    def action_validate_price_list(self):
+        """Probe each sub-zone via calculateShipmentFees to find which ones
+        the merchant has rates for, mark them in_price_list=True and the
+        rest in_price_list=False. Runs in a background thread so the
+        browser doesn't time out.
+        """
+        self.ensure_one()
+        if not self.default_service_id or not self.default_service_id.api_id:
+            raise UserError(
+                'Set a Default Shipping Service on this Delivery Company '
+                'before validating the price list.'
+            )
+        if self.sync_in_progress:
+            raise UserError(
+                'A sync is already running. Wait for it to finish, or refresh '
+                'and check the progress message.'
+            )
+        self.sync_in_progress = True
+        self.sync_progress = 'Starting price-list validation…'
+        self.env.cr.commit()
+
+        threading.Thread(
+            target=self._do_validate_price_list,
+            args=(self.env.cr.dbname, self.id, self.env.uid),
+            daemon=True,
+        ).start()
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': 'Price-List Validation Started',
+                'message': 'Probing all sub-zones via calculateShipmentFees. '
+                           'Refresh the page to see progress.',
+                'type': 'info',
+                'sticky': True,
+            },
+        }
+
+    def _do_validate_price_list(self, dbname, company_id, uid):
+        """Background worker: probe every sub-zone and mark in_price_list."""
+        from odoo import api as odoo_api, registry as odoo_registry, SUPERUSER_ID
+        registry = odoo_registry(dbname)
+        valid_count = 0
+        invalid_count = 0
+        try:
+            with registry.cursor() as cr:
+                env = odoo_api.Environment(cr, uid, {})
+                company = env['accurate.delivery.company'].browse(company_id)
+                if not company.exists():
+                    return
+                service_id = company.default_service_id.api_id
+                subzones = company.subzone_ids.sorted('id')
+                total = len(subzones)
+                for idx, sub in enumerate(subzones, 1):
+                    parent_api = sub.parent_id.api_id
+                    if not parent_api or not sub.api_id:
+                        continue
+                    fee_input = {
+                        'serviceId': service_id,
+                        'recipientZoneId': parent_api,
+                        'recipientSubzoneId': sub.api_id,
+                        'weight': 0.5,
+                        'price': 1.0,
+                        'paymentTypeCode': 'COLC',
+                        'priceTypeCode': 'EXCLD',
+                        'typeCode': 'FDP',
+                    }
+                    valid = False
+                    try:
+                        fees = company._al_calculate_fees(fee_input)
+                        if fees and fees.get('total') is not None:
+                            valid = True
+                    except Exception:
+                        valid = False
+                    sub.write({
+                        'in_price_list': valid,
+                        'price_list_validated_at': fields.Datetime.now(),
+                    })
+                    if valid:
+                        valid_count += 1
+                    else:
+                        invalid_count += 1
+                    if idx % 5 == 0:
+                        company.sync_progress = (
+                            'Validating %d/%d (valid=%d, invalid=%d)…'
+                            % (idx, total, valid_count, invalid_count)
+                        )
+                        cr.commit()
+                company.write({
+                    'sync_in_progress': False,
+                    'sync_progress': (
+                        'Price-list validation done. %d valid, %d invalid sub-zones.'
+                        % (valid_count, invalid_count)
+                    ),
+                })
+                cr.commit()
+        except Exception as exc:
+            _logger.exception('Accurate price-list validation failed: %s', exc)
+            try:
+                with registry.cursor() as cr:
+                    env = odoo_api.Environment(cr, uid, {})
+                    env['accurate.delivery.company'].browse(company_id).write({
+                        'sync_in_progress': False,
+                        'sync_progress': 'Validation failed: %s' % exc,
+                    })
+                    cr.commit()
+            except Exception:
+                pass
 
     def action_sync_cancellation_reasons(self):
         """Sync the master list of cancellation reasons from the API."""

@@ -19,7 +19,7 @@ class StockPicking(models.Model):
     accurate_recipient_subzone_id = fields.Many2one(
         'accurate.zone',
         string='Recipient Sub-zone',
-        domain="[('is_subzone', '=', True), ('parent_id', '=', accurate_recipient_zone_id)] if accurate_recipient_zone_id else [('id', '=', 0)]",
+        domain="[('is_subzone', '=', True), ('parent_id', '=', accurate_recipient_zone_id), ('in_price_list', '=', True)] if accurate_recipient_zone_id else [('id', '=', 0)]",
     )
     accurate_delivery_company_id = fields.Many2one(
         'accurate.delivery.company',

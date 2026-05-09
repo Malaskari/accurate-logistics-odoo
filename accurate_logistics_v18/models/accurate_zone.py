@@ -12,6 +12,17 @@ class AccurateZone(models.Model):
     api_id = fields.Integer('API ID', index=True, copy=False)
     name = fields.Char('Name', required=True)
     is_subzone = fields.Boolean('Is Sub-zone', default=False, index=True)
+    in_price_list = fields.Boolean(
+        'In Price List',
+        default=True, index=True,
+        help='False if Validate Price List on the Delivery Company found '
+             'this sub-zone has no price entry. Excluded from dropdowns when '
+             'False so the salesperson cannot pick an unsupported destination.',
+    )
+    price_list_validated_at = fields.Datetime(
+        'Price List Validated At',
+        readonly=True, copy=False,
+    )
     parent_id = fields.Many2one(
         'accurate.zone',
         string='Parent Zone',
