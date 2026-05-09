@@ -51,6 +51,11 @@ class AccurateDeliveryCompany(models.Model):
 
     # Background sync state
     sync_in_progress = fields.Boolean('Sync in Progress', default=False, copy=False)
+    sync_cancel_requested = fields.Boolean(
+        'Cancel Sync Requested', default=False, copy=False,
+        help='Set to True by the Stop Sync button. Background workers check '
+             'this flag periodically and exit early when set.',
+    )
     sync_progress = fields.Char('Sync Progress', copy=False, default='')
 
     # Discovered branches (from Test Connection probe)
@@ -369,7 +374,11 @@ class AccurateDeliveryCompany(models.Model):
             )
 
         # Mark the sync as starting and commit so the worker thread sees it.
-        self.write({'sync_in_progress': True, 'sync_progress': 'Starting…'})
+        self.write({
+            'sync_in_progress': True,
+            'sync_cancel_requested': False,
+            'sync_progress': 'Starting…',
+        })
         self.env.cr.commit()
 
         company_id = self.id
@@ -455,6 +464,7 @@ class AccurateDeliveryCompany(models.Model):
             return parent.id, subs
 
         processed = 0
+        cancelled = False
         with ThreadPoolExecutor(max_workers=WORKERS, thread_name_prefix='accurate-subzone') as pool:
             future_to_parent = {pool.submit(_fetch, p): p for p in parents}
             for future in as_completed(future_to_parent):
@@ -488,6 +498,27 @@ class AccurateDeliveryCompany(models.Model):
                     self.write({'subzone_ids': [(4, sid) for sid in batch_ids]})
 
                 if processed % REPORT_EVERY == 0 or processed == total:
+                    # Check cancel flag — re-read fresh from DB
+                    self.env.cr.commit()
+                    self.env.cr.execute(
+                        'SELECT sync_cancel_requested FROM '
+                        'accurate_delivery_company WHERE id = %s',
+                        (self.id,),
+                    )
+                    row = self.env.cr.fetchone()
+                    if row and row[0]:
+                        cancelled = True
+                        for f in future_to_parent:
+                            if not f.done():
+                                f.cancel()
+                        self.write({
+                            'sync_progress': (
+                                'Cancelled at %d / %d zones (%d subs synced).'
+                                % (processed, total, subzone_count)
+                            ),
+                        })
+                        self.env.cr.commit()
+                        break
                     self.write({
                         'sync_progress': 'Sub-zones: %d / %d zones processed (%d subs synced)' % (
                             processed, total, subzone_count,
@@ -495,9 +526,16 @@ class AccurateDeliveryCompany(models.Model):
                     })
                     self.env.cr.commit()
 
+        final_msg = (
+            'Cancelled — %d zones synced, %d sub-zones synced before stop.'
+            % (zone_count, subzone_count)
+        ) if cancelled else (
+            'Done — %d zones, %d sub-zones' % (zone_count, subzone_count)
+        )
         self.write({
             'sync_in_progress': False,
-            'sync_progress': 'Done — %d zones, %d sub-zones' % (zone_count, subzone_count),
+            'sync_cancel_requested': False,
+            'sync_progress': final_msg,
         })
         self.env.cr.commit()
 
@@ -505,6 +543,30 @@ class AccurateDeliveryCompany(models.Model):
         """Remove all zone/subzone links from this company (does not delete zones)."""
         self.ensure_one()
         self.write({'zone_ids': [(5,)], 'subzone_ids': [(5,)]})
+
+    def action_cancel_sync(self):
+        """Request the running background sync (zones / subzones / price-list
+        validation) to stop. The worker checks this flag between batches and
+        exits cleanly. UI returns immediately; cancellation may take up to a
+        few seconds while the current batch finishes.
+        """
+        self.ensure_one()
+        if not self.sync_in_progress:
+            raise UserError('No sync is currently running.')
+        self.write({
+            'sync_cancel_requested': True,
+            'sync_progress': (self.sync_progress or '') + ' [cancel requested]',
+        })
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': 'Cancel Requested',
+                'message': 'Background sync will stop after the current batch.',
+                'type': 'warning',
+                'sticky': False,
+            },
+        }
 
     def action_validate_price_list(self):
         """Probe each sub-zone via calculateShipmentFees to find which ones
@@ -523,8 +585,11 @@ class AccurateDeliveryCompany(models.Model):
                 'A sync is already running. Wait for it to finish, or refresh '
                 'and check the progress message.'
             )
-        self.sync_in_progress = True
-        self.sync_progress = 'Starting price-list validation…'
+        self.write({
+            'sync_in_progress': True,
+            'sync_cancel_requested': False,
+            'sync_progress': 'Starting price-list validation…',
+        })
         self.env.cr.commit()
 
         threading.Thread(
@@ -588,6 +653,7 @@ class AccurateDeliveryCompany(models.Model):
 
                 # Run probes in parallel — 10 workers ≈ 8x speedup
                 results = []
+                cancelled = False
                 with ThreadPoolExecutor(max_workers=10) as ex:
                     futures = {ex.submit(_probe, p): p for p in probes}
                     done = 0
@@ -602,8 +668,27 @@ class AccurateDeliveryCompany(models.Model):
                         except Exception:
                             invalid_count += 1
                         done += 1
-                        # Flush progress every 20 to avoid hammering the DB
+                        # Check cancel flag every 20 — cheap re-read from DB
                         if done % 20 == 0:
+                            cr.commit()
+                            cr.execute(
+                                'SELECT sync_cancel_requested FROM '
+                                'accurate_delivery_company WHERE id = %s',
+                                (company_id,),
+                            )
+                            row = cr.fetchone()
+                            if row and row[0]:
+                                cancelled = True
+                                # Stop submitting; cancel pending futures
+                                for f in futures:
+                                    if not f.done():
+                                        f.cancel()
+                                company.sync_progress = (
+                                    'Cancelled at %d/%d (valid=%d, invalid=%d).'
+                                    % (done, total, valid_count, invalid_count)
+                                )
+                                cr.commit()
+                                break
                             company.sync_progress = (
                                 'Validating %d/%d (valid=%d, invalid=%d)…'
                                 % (done, total, valid_count, invalid_count)
@@ -626,12 +711,18 @@ class AccurateDeliveryCompany(models.Model):
                         'price_list_validated_at': now,
                     })
 
+                final_msg = (
+                    ('Price-list validation cancelled. Partial results: '
+                     '%d valid, %d invalid sub-zones (%d/%d processed).'
+                     % (valid_count, invalid_count, len(results), total))
+                    if cancelled else
+                    ('Price-list validation done. %d valid, %d invalid sub-zones.'
+                     % (valid_count, invalid_count))
+                )
                 company.write({
                     'sync_in_progress': False,
-                    'sync_progress': (
-                        'Price-list validation done. %d valid, %d invalid sub-zones.'
-                        % (valid_count, invalid_count)
-                    ),
+                    'sync_cancel_requested': False,
+                    'sync_progress': final_msg,
                 })
                 cr.commit()
         except Exception as exc:

@@ -57,6 +57,11 @@
                   class="btn-secondary"
                   confirm="This probes EVERY sub-zone via calculateShipmentFees to mark which ones the merchant has rates for. Slow (one API call per sub-zone). Continue?"
                   invisible="not default_service_id or subzone_count == 0"/>
+          <button name="action_cancel_sync"
+                  string="Stop Sync"
+                  type="object"
+                  class="btn-danger"
+                  invisible="not sync_in_progress"/>
         </header>
 
         <sheet>
