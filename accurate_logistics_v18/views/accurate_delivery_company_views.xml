@@ -62,6 +62,12 @@
                   type="object"
                   class="btn-danger"
                   invisible="not sync_in_progress"/>
+          <button name="action_force_reset_sync"
+                  string="Force Reset"
+                  type="object"
+                  class="btn-secondary"
+                  confirm="Clear sync flags without waiting for the worker. Use this if Stop Sync didn't take effect. Continue?"
+                  invisible="not sync_in_progress"/>
         </header>
 
         <sheet>

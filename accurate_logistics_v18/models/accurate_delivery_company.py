@@ -544,6 +544,31 @@ class AccurateDeliveryCompany(models.Model):
         self.ensure_one()
         self.write({'zone_ids': [(5,)], 'subzone_ids': [(5,)]})
 
+    def action_force_reset_sync(self):
+        """Clear sync_in_progress / sync_cancel_requested without waiting for
+        the worker. Use when the worker is stuck (slow API, network drop) and
+        the polite cancel didn't take effect within a reasonable time.
+
+        Note: the orphan worker thread may still finish in the background and
+        write its final state. That's fine — it just overwrites our reset.
+        """
+        self.ensure_one()
+        self.write({
+            'sync_in_progress': False,
+            'sync_cancel_requested': False,
+            'sync_progress': 'Force-reset by user.',
+        })
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': 'Sync Force-Reset',
+                'message': 'Sync flags cleared. You can start a new sync now.',
+                'type': 'warning',
+                'sticky': False,
+            },
+        }
+
     def action_cancel_sync(self):
         """Request the running background sync (zones / subzones / price-list
         validation) to stop. The worker checks this flag between batches and
@@ -668,8 +693,8 @@ class AccurateDeliveryCompany(models.Model):
                         except Exception:
                             invalid_count += 1
                         done += 1
-                        # Check cancel flag every 20 — cheap re-read from DB
-                        if done % 20 == 0:
+                        # Check cancel flag every 5 — cheap re-read from DB
+                        if done % 5 == 0:
                             cr.commit()
                             cr.execute(
                                 'SELECT sync_cancel_requested FROM '
