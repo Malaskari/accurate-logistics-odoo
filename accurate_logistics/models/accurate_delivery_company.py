@@ -247,12 +247,23 @@ class AccurateDeliveryCompany(models.Model):
     # ── Zone sync actions ─────────────────────────────────────────────────────
 
     def _al_scope(self):
-        """Build the filter dict using branch/country scope set on this company."""
+        """Build the filter dict using branch/country/service scope set on
+        this company.
+
+        When `default_service_id` is set, the zone filter narrows to ONLY
+        the destinations in that service's price list — i.e. zones the
+        merchant can actually ship to. Without this filter, the API
+        returns Accurate's whole catalogue and dropdowns offer zones the
+        merchant has no rates for, leading to NO_PRICE_LIST_ENTRY errors
+        when the shipment is sent.
+        """
         scope = {}
         if self.api_branch_id:
             scope['branchId'] = self.api_branch_id
         if self.api_country_id:
             scope['countryId'] = self.api_country_id
+        if self.default_service_id and self.default_service_id.api_id:
+            scope['service'] = {'serviceId': self.default_service_id.api_id}
         return scope
 
     def action_sync_zones(self):
