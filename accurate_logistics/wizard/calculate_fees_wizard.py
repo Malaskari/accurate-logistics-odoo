@@ -22,9 +22,12 @@ class AccurateCalculateFeesWizard(models.TransientModel):
     )
     recipient_subzone_id = fields.Many2one(
         'accurate.zone', string='Recipient Sub-zone', required=True,
-        domain="[('is_subzone', '=', True), ('parent_id', '=', recipient_zone_id), ('in_price_list', '=', True)] if recipient_zone_id else [('id', '=', 0)]",
+        domain="[('is_subzone', '=', True), ('parent_id', '=', recipient_zone_id), ('in_price_list', '=', True), ('delivery_company_ids', 'in', [delivery_company_id])] if recipient_zone_id and delivery_company_id else [('id', '=', 0)]",
     )
-    service_id = fields.Many2one('accurate.service', string='Shipping Service', required=True)
+    service_id = fields.Many2one(
+        'accurate.service', string='Shipping Service', required=True,
+        domain="[('company_id', '=', delivery_company_id)] if delivery_company_id else [('id', '=', 0)]",
+    )
     price = fields.Float('Declared Value', required=True, digits=(16, 2))
     weight = fields.Float('Weight (kg)', required=True, digits=(10, 3))
     payment_type_code = fields.Selection(

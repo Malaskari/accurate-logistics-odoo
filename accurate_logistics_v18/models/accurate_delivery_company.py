@@ -131,8 +131,10 @@ class AccurateDeliveryCompany(models.Model):
     default_service_id = fields.Many2one(
         'accurate.service',
         string='Default Shipping Service',
+        domain="[('company_id', '=', id)]",
         help='Required by Accurate Logistics on every shipment. '
-             'If left empty, the first synced service will be used.',
+             'If left empty, the first synced service for this company '
+             'will be used.',
     )
 
     # ── Zones linked to this company ──────────────────────────────────────────
@@ -211,7 +213,7 @@ class AccurateDeliveryCompany(models.Model):
             })
             branches_created += 1
 
-        # ── Sync services dropdown ───────────────────────────────────────
+        # ── Sync services dropdown (scoped to THIS company) ──────────────
         services_synced = 0
         try:
             services = self._al_list_services() or []
@@ -220,8 +222,15 @@ class AccurateDeliveryCompany(models.Model):
                 s_name = s.get('name', '')
                 if not s_id:
                     continue
-                existing = Service.search([('api_id', '=', s_id)], limit=1)
-                vals = {'api_id': s_id, 'name': s_name}
+                existing = Service.search([
+                    ('api_id', '=', s_id),
+                    ('company_id', '=', self.id),
+                ], limit=1)
+                vals = {
+                    'api_id': s_id,
+                    'name': s_name,
+                    'company_id': self.id,
+                }
                 if existing:
                     existing.write(vals)
                 else:
@@ -772,7 +781,7 @@ class AccurateDeliveryCompany(models.Model):
             raise UserError(
                 'Failed to fetch cancellation reasons from Accurate Logistics:\n%s' % exc
             )
-        result = self.env['accurate.cancellation.reason']._upsert_from_api(reasons)
+        result = self.env['accurate.cancellation.reason']._upsert_from_api(reasons, company=self)
         return {
             'type': 'ir.actions.client',
             'tag': 'display_notification',

@@ -25,7 +25,7 @@ class CancelShipmentWizard(models.TransientModel):
         'accurate.cancellation.reason',
         string='Cancellation Reason',
         required=True,
-        domain=[('active', '=', True)],
+        domain="[('active', '=', True), ('company_id', '=', delivery_company_id)] if delivery_company_id else [('id', '=', 0)]",
     )
     notes = fields.Text(
         'Notes',

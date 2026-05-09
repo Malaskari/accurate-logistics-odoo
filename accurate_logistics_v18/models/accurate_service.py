@@ -7,51 +7,52 @@ class AccurateService(models.Model):
     _description = 'Accurate Logistics Shipping Service'
     _inherit = ['accurate.api.mixin']
     _rec_name = 'name'
-    _order = 'name'
+    _order = 'company_id, name'
 
     api_id = fields.Integer('API ID', required=True, index=True, copy=False)
     name = fields.Char('Service Name', required=True)
     active = fields.Boolean('Active', default=True)
+    company_id = fields.Many2one(
+        'accurate.delivery.company',
+        string='Delivery Company',
+        ondelete='cascade',
+        index=True,
+        help='Owner Delivery Company. Each merchant account exposes its own '
+             'set of shipping services, so the same api_id can re-occur '
+             'across companies.',
+    )
 
-    @api.constrains('api_id')
+    @api.constrains('api_id', 'company_id')
     def _check_api_id_unique(self):
         for rec in self:
             if not rec.api_id:
                 continue
-            duplicate = self.search([('api_id', '=', rec.api_id), ('id', '!=', rec.id)], limit=1)
+            duplicate = self.search([
+                ('api_id', '=', rec.api_id),
+                ('company_id', '=', rec.company_id.id),
+                ('id', '!=', rec.id),
+            ], limit=1)
             if duplicate:
                 raise ValidationError(
-                    'A service with API ID %d already exists: %s' % (rec.api_id, duplicate.name)
+                    'A service with API ID %d already exists for this '
+                    'Delivery Company: %s' % (rec.api_id, duplicate.name)
                 )
 
     def action_sync_services(self):
-        """Fetch shipping services from the API and upsert them locally."""
-        services = self._al_list_services()
-        if not services:
-            raise UserError(
-                'No shipping services returned from the API. Check your credentials.'
-            )
-
-        synced = 0
-        for s in services:
-            s_id = s.get('id')
-            s_name = s.get('name', '')
-            if not s_id:
-                continue
-            existing = self.search([('api_id', '=', s_id)], limit=1)
-            vals = {'api_id': s_id, 'name': s_name}
-            if existing:
-                existing.write(vals)
-            else:
-                self.create(vals)
-            synced += 1
-
+        """DEPRECATED — use Test Connection on a Delivery Company.
+        Kept for back-compat; iterates all configured companies and re-syncs.
+        """
+        for company in self.env['accurate.delivery.company'].search([]):
+            try:
+                company.action_test_connection()
+            except Exception:
+                pass
         return {
             'type': 'ir.actions.client',
             'tag': 'display_notification',
             'params': {
                 'title': 'Services Synced',
-                'message': 'Successfully synced %d shipping services.' % synced,
+                'message': 'Re-ran Test Connection on every Delivery Company.',
                 'type': 'success',
                 'sticky': False,
             },

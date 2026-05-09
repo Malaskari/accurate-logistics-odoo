@@ -95,7 +95,7 @@ class AccurateShipment(models.Model):
     )
     recipient_subzone_id = fields.Many2one(
         'accurate.zone', string='Recipient Sub-zone', required=True,
-        domain="[('is_subzone', '=', True), ('parent_id', '=', recipient_zone_id), ('in_price_list', '=', True)] if recipient_zone_id else [('id', '=', 0)]",
+        domain="[('is_subzone', '=', True), ('parent_id', '=', recipient_zone_id), ('in_price_list', '=', True), ('delivery_company_ids', 'in', [delivery_company_id])] if recipient_zone_id and delivery_company_id else [('id', '=', 0)]",
         tracking=True,
     )
     recipient_latitude = fields.Float('Lat', digits=(10, 7))
@@ -119,7 +119,10 @@ class AccurateShipment(models.Model):
 
     # ── Shipment details ──────────────────────────────────────────────────────
 
-    service_id = fields.Many2one('accurate.service', string='Shipping Service', tracking=True)
+    service_id = fields.Many2one(
+        'accurate.service', string='Shipping Service', tracking=True,
+        domain="[('company_id', '=', delivery_company_id)] if delivery_company_id else [('id', '=', 0)]",
+    )
     type_code = fields.Selection(
         [
             ('FDP', 'Full Package Delivery'),
@@ -198,14 +201,17 @@ class AccurateShipment(models.Model):
                 'Go to Accurate Logistics → Configuration → Zones and sync them first.'
             )
 
-        # Resolve a shipping service — required by the API.
+        # Resolve a shipping service — required by the API. Always within
+        # the same Delivery Company so we don't pick a service belonging to
+        # a different merchant account.
         service = self.service_id
         if not service and self.delivery_company_id:
             service = self.delivery_company_id.default_service_id
-        if not service:
-            service = self.env['accurate.service'].search(
-                [('api_id', '!=', False)], limit=1
-            )
+        if not service and self.delivery_company_id:
+            service = self.env['accurate.service'].search([
+                ('api_id', '!=', False),
+                ('company_id', '=', self.delivery_company_id.id),
+            ], limit=1)
         if not service or not service.api_id:
             raise UserError(
                 'No Shipping Service available. Open the Delivery Company form, '
