@@ -22,7 +22,7 @@ class SaleOrder(models.Model):
         'accurate.zone',
         string='Recipient Sub-zone',
         # No zone selected → empty list. With zone → only its sub-zones.
-        domain="[('is_subzone', '=', True), ('parent_id', '=', accurate_recipient_zone_id), ('in_price_list', '=', True), ('delivery_company_ids', 'in', [accurate_delivery_company_id])] if accurate_recipient_zone_id and accurate_delivery_company_id else [('id', '=', 0)]",
+        domain="[('is_subzone', '=', True), ('parent_id', '=', accurate_recipient_zone_id), ('in_price_list', '=', True)] if accurate_recipient_zone_id else [('id', '=', 0)]",
         tracking=True,
         help='Pick a Recipient Zone first — this dropdown then shows only that zone’s sub-zones.',
     )
