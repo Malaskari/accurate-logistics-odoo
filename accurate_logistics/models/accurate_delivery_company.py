@@ -559,41 +559,73 @@ class AccurateDeliveryCompany(models.Model):
                 service_id = company.default_service_id.api_id
                 subzones = company.subzone_ids.sorted('id')
                 total = len(subzones)
-                for idx, sub in enumerate(subzones, 1):
-                    parent_api = sub.parent_id.api_id
-                    if not parent_api or not sub.api_id:
+
+                # Build the probe list in memory (id, parent_api, sub_api)
+                probes = []
+                for sub in subzones:
+                    if not sub.parent_id.api_id or not sub.api_id:
                         continue
+                    probes.append((sub.id, sub.parent_id.api_id, sub.api_id))
+
+                # Local probe fn — uses a fresh requests context per worker
+                def _probe(triple):
+                    sub_id, parent_api, sub_api = triple
                     fee_input = {
                         'serviceId': service_id,
                         'recipientZoneId': parent_api,
-                        'recipientSubzoneId': sub.api_id,
+                        'recipientSubzoneId': sub_api,
                         'weight': 0.5,
                         'price': 1.0,
                         'paymentTypeCode': 'COLC',
                         'priceTypeCode': 'EXCLD',
                         'typeCode': 'FDP',
                     }
-                    valid = False
                     try:
                         fees = company._al_calculate_fees(fee_input)
-                        if fees and fees.get('total') is not None:
-                            valid = True
+                        return (sub_id, bool(fees and fees.get('total') is not None))
                     except Exception:
-                        valid = False
-                    sub.write({
-                        'in_price_list': valid,
-                        'price_list_validated_at': fields.Datetime.now(),
+                        return (sub_id, False)
+
+                # Run probes in parallel — 10 workers ≈ 8x speedup
+                results = []
+                with ThreadPoolExecutor(max_workers=10) as ex:
+                    futures = {ex.submit(_probe, p): p for p in probes}
+                    done = 0
+                    for fut in as_completed(futures):
+                        try:
+                            sub_id, valid = fut.result()
+                            results.append((sub_id, valid))
+                            if valid:
+                                valid_count += 1
+                            else:
+                                invalid_count += 1
+                        except Exception:
+                            invalid_count += 1
+                        done += 1
+                        # Flush progress every 20 to avoid hammering the DB
+                        if done % 20 == 0:
+                            company.sync_progress = (
+                                'Validating %d/%d (valid=%d, invalid=%d)…'
+                                % (done, total, valid_count, invalid_count)
+                            )
+                            cr.commit()
+
+                # Bulk write results — group by validity for fewer SQL roundtrips
+                now = fields.Datetime.now()
+                valid_ids = [sid for sid, ok in results if ok]
+                invalid_ids = [sid for sid, ok in results if not ok]
+                Zone = env['accurate.zone']
+                if valid_ids:
+                    Zone.browse(valid_ids).write({
+                        'in_price_list': True,
+                        'price_list_validated_at': now,
                     })
-                    if valid:
-                        valid_count += 1
-                    else:
-                        invalid_count += 1
-                    if idx % 5 == 0:
-                        company.sync_progress = (
-                            'Validating %d/%d (valid=%d, invalid=%d)…'
-                            % (idx, total, valid_count, invalid_count)
-                        )
-                        cr.commit()
+                if invalid_ids:
+                    Zone.browse(invalid_ids).write({
+                        'in_price_list': False,
+                        'price_list_validated_at': now,
+                    })
+
                 company.write({
                     'sync_in_progress': False,
                     'sync_progress': (
