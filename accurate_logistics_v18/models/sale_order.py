@@ -142,9 +142,36 @@ class SaleOrder(models.Model):
             action['res_id'] = self.accurate_shipment_ids.id
         return action
 
-    # ── Propagate to delivery orders on confirmation ──────────────────────────
+    # ── Validation + Propagate to delivery orders on confirmation ─────────────
+
+    def _validate_accurate_required_fields(self):
+        """Block SO confirmation unless all 4 Accurate dispatch fields set."""
+        from odoo.exceptions import UserError
+        missing = []
+        for order in self:
+            m = []
+            if not order.accurate_delivery_company_id:
+                m.append('Delivery Company / شركة الشحن')
+            if not order.accurate_service_id:
+                m.append('Shipping Service / خدمة الشحن')
+            if not order.accurate_recipient_zone_id:
+                m.append('Recipient Zone / منطقة المستلم')
+            if not order.accurate_recipient_subzone_id:
+                m.append('Recipient Sub-zone / منطقة المستلم الفرعية')
+            if m:
+                missing.append((order.name, m))
+        if missing:
+            lines = []
+            for name, fields_list in missing:
+                lines.append('%s:\n  • %s' % (name, '\n  • '.join(fields_list)))
+            raise UserError(
+                'Cannot confirm — missing Accurate Logistics fields:\n\n'
+                'لا يمكن تأكيد الطلب — حقول أكيوريت لوجيستكس ناقصة:\n\n'
+                + '\n\n'.join(lines)
+            )
 
     def _action_confirm(self):
+        self._validate_accurate_required_fields()
         res = super()._action_confirm()
         for order in self:
             # 1. Propagate Accurate fields to the dispatch picking
