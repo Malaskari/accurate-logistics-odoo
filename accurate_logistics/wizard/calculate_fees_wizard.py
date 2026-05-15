@@ -28,6 +28,18 @@ class AccurateCalculateFeesWizard(models.TransientModel):
         'accurate.service', string='Shipping Service', required=True,
         domain="[('company_id', '=', delivery_company_id)] if delivery_company_id else [('id', '=', 0)]",
     )
+
+    @api.onchange('delivery_company_id')
+    def _onchange_delivery_company_id(self):
+        for w in self:
+            company = w.delivery_company_id
+            if w.service_id and w.service_id.company_id != company:
+                w.service_id = False
+            if w.recipient_zone_id and company not in w.recipient_zone_id.delivery_company_ids:
+                w.recipient_zone_id = False
+                w.recipient_subzone_id = False
+            if company and company.default_service_id and not w.service_id:
+                w.service_id = company.default_service_id
     price = fields.Float('Declared Value', required=True, digits=(16, 2))
     weight = fields.Float('Weight (kg)', required=True, digits=(10, 3))
     payment_type_code = fields.Selection(

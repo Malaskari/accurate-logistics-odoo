@@ -31,6 +31,18 @@ class StockPicking(models.Model):
         domain="[('company_id', '=', accurate_delivery_company_id)] if accurate_delivery_company_id else [('id', '=', 0)]",
     )
 
+    @api.onchange('accurate_delivery_company_id')
+    def _onchange_accurate_delivery_company_id(self):
+        for p in self:
+            company = p.accurate_delivery_company_id
+            if p.accurate_service_id and p.accurate_service_id.company_id != company:
+                p.accurate_service_id = False
+            if p.accurate_recipient_zone_id and company not in p.accurate_recipient_zone_id.delivery_company_ids:
+                p.accurate_recipient_zone_id = False
+                p.accurate_recipient_subzone_id = False
+            if company and company.default_service_id and not p.accurate_service_id:
+                p.accurate_service_id = company.default_service_id
+
     # ── Shipment classification (passed to the API on dispatch) ──────────────
     accurate_type_code = fields.Selection(
         [

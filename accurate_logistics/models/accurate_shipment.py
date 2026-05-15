@@ -123,6 +123,21 @@ class AccurateShipment(models.Model):
         'accurate.service', string='Shipping Service', tracking=True,
         domain="[('company_id', '=', delivery_company_id)] if delivery_company_id else [('id', '=', 0)]",
     )
+
+    @api.onchange('delivery_company_id')
+    def _onchange_delivery_company_id(self):
+        for s in self:
+            company = s.delivery_company_id
+            if s.service_id and s.service_id.company_id != company:
+                s.service_id = False
+            if s.recipient_zone_id and company not in s.recipient_zone_id.delivery_company_ids:
+                s.recipient_zone_id = False
+                s.recipient_subzone_id = False
+            if s.sender_zone_id and company not in s.sender_zone_id.delivery_company_ids:
+                s.sender_zone_id = False
+                s.sender_subzone_id = False
+            if company and company.default_service_id and not s.service_id:
+                s.service_id = company.default_service_id
     type_code = fields.Selection(
         [
             ('FDP', 'Full Package Delivery'),

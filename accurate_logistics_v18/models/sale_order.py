@@ -42,6 +42,25 @@ class SaleOrder(models.Model):
              'when the shipment is created.',
     )
 
+    @api.onchange('accurate_delivery_company_id')
+    def _onchange_accurate_delivery_company_id(self):
+        """When picking a Delivery Company:
+        - Auto-fill Shipping Service with the company's default_service_id.
+        - Clear zone / sub-zone / service if they don't belong to the new
+          company (so users don't carry stale picks across companies).
+        """
+        for order in self:
+            company = order.accurate_delivery_company_id
+            # Clear stale picks belonging to a different company
+            if order.accurate_service_id and order.accurate_service_id.company_id != company:
+                order.accurate_service_id = False
+            if order.accurate_recipient_zone_id and company not in order.accurate_recipient_zone_id.delivery_company_ids:
+                order.accurate_recipient_zone_id = False
+                order.accurate_recipient_subzone_id = False
+            # Auto-fill default service if company has one
+            if company and company.default_service_id and not order.accurate_service_id:
+                order.accurate_service_id = company.default_service_id
+
     # ── Shipment classification (passed to the API on dispatch) ────────────
     accurate_type_code = fields.Selection(
         [
