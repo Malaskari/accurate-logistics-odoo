@@ -128,6 +128,17 @@ class AccurateDeliveryCompany(models.Model):
              'picking to bring the goods back into stock. Set to False if you '
              'prefer to create returns manually.',
     )
+    notify_user_ids = fields.Many2many(
+        'res.users',
+        'accurate_company_notify_user_rel',
+        'company_id', 'user_id',
+        string='Users to Notify',
+        help='Users who receive an activity on the outgoing picking when the '
+             'shipment is marked Delivered by the courier but the internal '
+             'Pick/Pack step is still not done. The outgoing picking will '
+             'NOT auto-validate in that case — these users must reconcile '
+             'the warehouse first.',
+    )
     default_service_id = fields.Many2one(
         'accurate.service',
         string='Default Shipping Service',

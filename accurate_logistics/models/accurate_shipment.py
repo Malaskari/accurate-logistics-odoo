@@ -1,5 +1,7 @@
 import logging
 
+from markupsafe import Markup
+
 from odoo import api, fields, models
 from odoo.exceptions import UserError
 
@@ -201,6 +203,37 @@ class AccurateShipment(models.Model):
                 )
         return super().create(vals_list)
 
+    # ── Sale Order status log ─────────────────────────────────────────────────
+    #
+    # The shipment chatter keeps the detailed technical timeline (every
+    # API call, invoice posting, expense entry, etc.). The linked Sale
+    # Order's chatter gets ONLY clean lifecycle events in Arabic so the
+    # salesperson sees a high-level summary, not a noisy log.
+
+    def _so_status_log(self, en_msg, ar_msg=None):
+        """Post a clean log note on the linked Sale Order, in the current
+        user's language (Arabic if `lang` starts with 'ar_', otherwise the
+        English text).  Uses 'Log Note' subtype — internal only, no email
+        to followers.  Quiet no-op if there's no linked SO.
+        """
+        self.ensure_one()
+        sale = self.sale_id
+        if not sale:
+            return
+        lang = self.env.user.lang or 'en_US'
+        body = ar_msg if (ar_msg and lang.startswith('ar')) else en_msg
+        try:
+            sale.message_post(
+                body=Markup(body),
+                message_type='comment',
+                subtype_xmlid='mail.mt_note',
+            )
+        except Exception as exc:
+            _logger.info(
+                'Accurate: could not post SO status log on %s: %s',
+                sale.name, exc,
+            )
+
     # ── API dispatch ──────────────────────────────────────────────────────────
 
     def action_send_to_api(self):
@@ -309,6 +342,13 @@ class AccurateShipment(models.Model):
         self.write({'state': 'sent', 'error_message': False})
         self.message_post(
             body='Shipment sent to Accurate Logistics. Code: <b>%s</b>' % (self.code or '—')
+        )
+        company_name = self.delivery_company_id.name if self.delivery_company_id else ''
+        self._so_status_log(
+            en_msg='🚚 New shipment created in <b>%s</b> for this order — code: <b>%s</b>'
+                   % (company_name, self.code or '—'),
+            ar_msg='🚚 تم إنشاء شحنة جديدة في نظام <b>%s</b> لهذا الطلب برقم <b>%s</b>'
+                   % (company_name, self.code or '—'),
         )
 
     # ── Apply API response ────────────────────────────────────────────────────
@@ -419,6 +459,24 @@ class AccurateShipment(models.Model):
         if self.state != 'delivered':
             self.state = 'delivered'
 
+        self._so_status_log(
+            en_msg='✅ Shipment <b>%s</b> delivered to the customer.'
+                   % (self.code or self.name),
+            ar_msg='✅ تم تسليم الشحنة <b>%s</b> إلى العميل.'
+                   % (self.code or self.name),
+        )
+
+        # Auto-validate every pending picking on the chain so the warehouse
+        # board shows the goods as delivered to the customer (the courier
+        # already physically did it).
+        try:
+            self._validate_delivery_pickings()
+        except Exception as exc:
+            _logger.warning(
+                'Accurate: auto-validate pickings failed for %s: %s',
+                self.name, exc,
+            )
+
         sale = self.sale_id
         delivery_company = self.delivery_company_id
         if not delivery_company or not delivery_company.journal_id:
@@ -478,16 +536,13 @@ class AccurateShipment(models.Model):
                 'invoice_id': invoice.id,
                 'payment_id': payment.id if payment else False,
             })
+            # Posted via message_post → auto-mirrored to the SO chatter.
             self.message_post(
                 body=(
                     'Delivered! Invoice <b>%s</b> created and COD payment of '
                     '<b>%.2f</b> posted to journal <b>%s</b>.'
                 ) % (invoice.name, register_vals['amount'], delivery_company.journal_id.name)
             )
-            if sale:
-                sale.message_post(
-                    body='Accurate Logistics: shipment <b>%s</b> delivered. Invoice and payment created automatically.' % (self.code or self.name)
-                )
 
             # ── 4. Book courier's delivery fee as an expense ──────────────
             # Only when the shipment uses "Shipping Fee Included in Price".
@@ -496,6 +551,196 @@ class AccurateShipment(models.Model):
             # record the difference as a shipping expense.
             if self.price_type_code == 'INCLD':
                 self._book_shipping_fee_expense()
+
+    def _validate_delivery_pickings(self):
+        """When the shipment is marked delivered, auto-validate ONLY the
+        outgoing picking (the one going to Partners/Customers).
+
+        Guardrail: if any internal Pick / Pack step is still NOT done, do
+        NOT auto-validate the outgoing — instead, log an activity on the
+        outgoing picking pinging the users listed on the Delivery Company's
+        "Users to Notify" field so the warehouse reconciles first.
+
+        Internal Pick / Pack steps stay manual — the warehouse validates
+        them when they hand the package to the courier. The outgoing step
+        represents the courier-to-customer leg, which is what Accurate's
+        DELIVERED status actually means.
+        """
+        self.ensure_one()
+        pickings = self.env['stock.picking']
+        if self.sale_id:
+            pickings |= self.sale_id.picking_ids
+        if self.picking_id:
+            pickings |= self.picking_id
+
+        # The outgoing picking to the customer.
+        outgoing = pickings.filtered(
+            lambda p: p.picking_type_code == 'outgoing'
+            and p.state in ('confirmed', 'waiting', 'assigned')
+        )
+        if not outgoing:
+            return
+
+        # Guardrail: are there any internal steps still pending?
+        internal_pending = pickings.filtered(
+            lambda p: p.picking_type_code != 'outgoing'
+            and p.state not in ('done', 'cancel')
+        )
+        if internal_pending:
+            self._notify_internal_pick_pending(outgoing, internal_pending)
+            return
+
+        validated_names = []
+        for pick in outgoing:
+            # Reserve stock if it isn't already.
+            try:
+                if pick.state in ('confirmed', 'waiting') and hasattr(pick, 'action_assign'):
+                    pick.action_assign()
+            except Exception:
+                pass
+
+            # Make sure every move has its done quantity filled — otherwise
+            # button_validate opens an immediate-transfer / detailed-ops
+            # wizard. Field name varies by Odoo version.
+            for move in pick.move_ids:
+                if move.state in ('done', 'cancel'):
+                    continue
+                demand = move.product_uom_qty or 0.0
+                if not demand:
+                    continue
+                for fname in ('quantity', 'quantity_done'):
+                    if fname in move._fields:
+                        try:
+                            setattr(move, fname, demand)
+                        except Exception:
+                            pass
+                        break
+
+            try:
+                ctx = {'skip_backorder': True, 'skip_sms': True,
+                       'cancel_backorder': True, 'skip_immediate': True}
+                res = pick.with_context(**ctx).button_validate()
+                # Some Odoo versions return a wizard action when there's a
+                # backorder candidate — auto-confirm "no backorder".
+                if isinstance(res, dict) and res.get('res_model') in (
+                    'stock.backorder.confirmation',
+                    'stock.immediate.transfer',
+                ):
+                    wctx = res.get('context', {}) or {}
+                    Wiz = self.env[res['res_model']].with_context(**wctx)
+                    wiz = Wiz.create({})
+                    if hasattr(wiz, 'process_cancel_backorder'):
+                        wiz.process_cancel_backorder()
+                    elif hasattr(wiz, 'process'):
+                        wiz.process()
+                validated_names.append(pick.name)
+            except Exception as exc:
+                _logger.warning(
+                    'Accurate: failed to auto-validate picking %s: %s',
+                    pick.name, exc,
+                )
+                self._chatter(
+                    '<b>Warning:</b> Could not auto-validate picking '
+                    '<b>%s</b> on delivery: %s' % (pick.name, exc)
+                )
+        if validated_names:
+            self._chatter(
+                'Auto-validated picking(s) on delivery: <b>%s</b>.'
+                % ', '.join(validated_names)
+            )
+
+    def _notify_internal_pick_pending(self, outgoing_pickings, internal_pending):
+        """Courier says DELIVERED but warehouse hasn't finished internal
+        Pick/Pack. Don't auto-validate — instead, log an activity on each
+        outgoing picking targeting the users on Delivery Company's
+        notify_user_ids list, and post a chatter trail.
+        """
+        self.ensure_one()
+        company = self.delivery_company_id
+        users = company.notify_user_ids if company else self.env['res.users']
+        # Fallback: at least notify the salesperson on the SO + the shipment's
+        # creator, otherwise the activity has no assignee.
+        if not users:
+            fallback = self.env['res.users']
+            if self.sale_id and self.sale_id.user_id:
+                fallback |= self.sale_id.user_id
+            if self.create_uid:
+                fallback |= self.create_uid
+            users = fallback
+
+        pending_names = ', '.join(internal_pending.mapped('name'))
+        summary = 'Accurate: Delivered but internal pick not done'
+        note = (
+            'Courier marked shipment <b>%s</b> as <b>DELIVERED</b> but the '
+            'internal warehouse step(s) <b>%s</b> are not validated yet. '
+            'The outgoing picking was NOT auto-validated. Please reconcile '
+            'the warehouse first, then validate the outgoing picking '
+            'manually.<br/><br/>'
+            'تم تسليم الشحنة <b>%s</b> من قبل المندوب لكن خطوة الإخراج '
+            'الداخلية <b>%s</b> غير مكتملة. الرجاء إنهاؤها يدويًا أولاً.'
+        ) % (
+            self.code or self.name, pending_names,
+            self.code or self.name, pending_names,
+        )
+
+        activity_type = self.env.ref('mail.mail_activity_data_warning',
+                                     raise_if_not_found=False) \
+            or self.env.ref('mail.mail_activity_data_todo',
+                            raise_if_not_found=False)
+        Activity = self.env['mail.activity']
+        Picking = self.env['stock.picking']
+        picking_model_id = self.env['ir.model']._get_id('stock.picking')
+
+        notified_logins = []
+        for pick in outgoing_pickings:
+            for user in users:
+                try:
+                    Activity.create({
+                        'res_model_id': picking_model_id,
+                        'res_model': 'stock.picking',
+                        'res_id': pick.id,
+                        'activity_type_id': activity_type.id if activity_type else False,
+                        'summary': summary,
+                        'note': note,
+                        'user_id': user.id,
+                        'date_deadline': fields.Date.today(),
+                    })
+                    if user.login not in notified_logins:
+                        notified_logins.append(user.login)
+                except Exception as exc:
+                    _logger.warning(
+                        'Accurate: failed to create activity on %s for %s: %s',
+                        pick.name, user.login, exc,
+                    )
+            # Also drop a chatter note on the picking itself so it's visible
+            # even if the activity list is collapsed.
+            try:
+                pick.message_post(
+                    body=note,
+                    message_type='comment',
+                    subtype_xmlid='mail.mt_comment',
+                )
+            except Exception:
+                pass
+
+        self._chatter(
+            'Outgoing picking <b>%s</b> NOT auto-validated — internal step(s) '
+            '<b>%s</b> still pending. Activity logged for: <b>%s</b>.'
+            % (
+                ', '.join(outgoing_pickings.mapped('name')),
+                pending_names,
+                ', '.join(notified_logins) if notified_logins else '(no users configured)',
+            )
+        )
+        self._so_status_log(
+            en_msg='⚠️ Shipment <b>%s</b> reported delivered by the courier, '
+                   'but the internal warehouse step is still not validated — '
+                   'manual confirmation required.'
+                   % (self.code or self.name),
+            ar_msg='⚠️ الشحنة <b>%s</b> مسلَّمة من المندوب لكن خطوة التجهيز '
+                   'الداخلية لم تكتمل بعد — يلزم تأكيدها يدويًا.'
+                   % (self.code or self.name),
+        )
 
     def _book_shipping_fee_expense(self):
         """Post a journal entry that records the courier's delivery fee as
@@ -622,6 +867,15 @@ class AccurateShipment(models.Model):
             'Reversing COD invoice / payment / shipping-expense, '
             'handling pickings, and cancelling the Sale Order.'
         )
+        # Pull the return reason from the courier's status name (set by
+        # the webhook). Falls back to a generic label if missing.
+        return_reason = self.api_status_name or 'Returned by courier'
+        self._so_status_log(
+            en_msg='↩️ Shipment <b>%s</b> returned. Reason: <b>%s</b>.'
+                   % (self.code or self.name, return_reason),
+            ar_msg='↩️ تم إرجاع الشحنة <b>%s</b>. السبب: <b>%s</b>.'
+                   % (self.code or self.name, return_reason),
+        )
 
         reason = 'Shipment returned to sender'
         self._reverse_invoice_if_any(reason=reason)
@@ -671,6 +925,27 @@ class AccurateShipment(models.Model):
             'Reversing COD invoice / payment / shipping-expense, '
             'handling pickings, and cancelling the Sale Order.'
         )
+        # Compose a reason line from cancellation_reason_id + notes (set
+        # by the cancel wizard) — if neither is filled, fall back to the
+        # courier's status label.
+        reason_parts = []
+        if self.cancellation_reason_id:
+            reason_parts.append(
+                self.cancellation_reason_id.name
+                or self.cancellation_reason_id.code
+                or ''
+            )
+        if self.cancellation_notes:
+            reason_parts.append(self.cancellation_notes)
+        if not reason_parts and self.api_status_name:
+            reason_parts.append(self.api_status_name)
+        reason_text = ' — '.join(p for p in reason_parts if p) or '—'
+        self._so_status_log(
+            en_msg='❌ Shipment <b>%s</b> cancelled. Reason: <b>%s</b>.'
+                   % (self.code or self.name, reason_text),
+            ar_msg='❌ تم إلغاء الشحنة <b>%s</b>. السبب: <b>%s</b>.'
+                   % (self.code or self.name, reason_text),
+        )
 
         reason = 'Shipment cancelled'
         self._reverse_invoice_if_any(reason=reason)
@@ -698,20 +973,13 @@ class AccurateShipment(models.Model):
     # ── Reversal helpers (shared between returned + cancelled flows) ──────────
 
     def _chatter(self, body):
-        """Post a chatter message on this shipment AND mirror it to the linked
-        Sale Order so the salesperson sees the full reverse-flow timeline
-        without having to open the shipment record.
+        """Post a chatter message on this shipment. The overridden
+        message_post() automatically mirrors it to the linked Sale Order
+        so the salesperson sees the full timeline without opening the
+        shipment record.
         """
         self.ensure_one()
         self.message_post(body=body)
-        if self.sale_id:
-            try:
-                self.sale_id.message_post(body=body)
-            except Exception as exc:
-                _logger.info(
-                    'Accurate: could not mirror chatter to SO %s: %s',
-                    self.sale_id.name, exc,
-                )
 
     def _cancel_sale_order_if_any(self, reason='Shipment reversed'):
         """Cancel the linked Sale Order so the operations dashboard reflects

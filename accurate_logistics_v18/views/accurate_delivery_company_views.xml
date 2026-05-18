@@ -173,6 +173,12 @@
               <field name="auto_create_return_picking"/>
             </group>
           </group>
+          <group string="Delivery Notifications">
+            <field name="notify_user_ids"
+                   widget="many2many_tags"
+                   options="{'no_create': True}"
+                   help="These users get an activity on the outgoing picking when the courier reports DELIVERED but the internal Pick/Pack step is still not done."/>
+          </group>
 
           <notebook>
 
