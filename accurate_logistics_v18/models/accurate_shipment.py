@@ -240,6 +240,32 @@ class AccurateShipment(models.Model):
         for rec in self:
             rec._send_to_api()
 
+    @staticmethod
+    def _al_clean_phone(value):
+        """Normalise a phone number to the format Accurate's GraphQL API
+        accepts (Libya: 10 digits starting with 09).
+
+        Strips whitespace, dashes, parens, dots, and the international
+        prefixes (+218, 218, 00218). Leaves a clean national number
+        starting with 0 when possible.
+        """
+        if not value:
+            return value
+        s = str(value).strip()
+        if not s:
+            return s
+        # Drop every char except digits (also drops + because the API rejects it).
+        digits = ''.join(ch for ch in s if ch.isdigit())
+        # Strip Libya country code variants.
+        if digits.startswith('00218'):
+            digits = digits[5:]
+        elif digits.startswith('218'):
+            digits = digits[3:]
+        # Ensure a leading 0 on national numbers (mobile starts with 9).
+        if digits and digits[0] != '0':
+            digits = '0' + digits
+        return digits or value
+
     def _send_to_api(self):
         self.ensure_one()
 
@@ -274,8 +300,8 @@ class AccurateShipment(models.Model):
         weight = self.weight or 0.5
         inp = {
             'recipientAddress': self.recipient_address,
-            'recipientMobile': self.recipient_mobile,
-            'recipientPhone': self.recipient_phone,
+            'recipientMobile': self._al_clean_phone(self.recipient_mobile),
+            'recipientPhone': self._al_clean_phone(self.recipient_phone),
             'recipientZoneId': self.recipient_zone_id.api_id,
             'recipientSubzoneId': self.recipient_subzone_id.api_id,
             'serviceId': service.api_id,
@@ -303,8 +329,8 @@ class AccurateShipment(models.Model):
         _set('recipientLatitude', self.recipient_latitude)
         _set('recipientLongitude', self.recipient_longitude)
         _set('senderName', self.sender_name)
-        _set('senderPhone', self.sender_phone)
-        _set('senderMobile', self.sender_mobile)
+        _set('senderPhone', self._al_clean_phone(self.sender_phone))
+        _set('senderMobile', self._al_clean_phone(self.sender_mobile))
         _set('senderAddress', self.sender_address)
         _set('senderPostalCode', self.sender_postal_code)
         if self.sender_zone_id and self.sender_zone_id.api_id:
