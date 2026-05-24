@@ -22,6 +22,24 @@ class AccurateService(models.Model):
              'across companies.',
     )
 
+    # Reverse side of accurate.zone.service_ids — the zones covered by this
+    # service's price list. Lets you see at a glance which zones a service
+    # supports, and use the field as a domain source for future per-service
+    # zone filtering.
+    zone_ids = fields.Many2many(
+        'accurate.zone',
+        'accurate_service_zone_rel',
+        'service_id', 'zone_id',
+        string='Zones',
+        help='Zones (parent + sub-zones) covered by this service\'s price list.',
+    )
+    zone_count = fields.Integer('Zone Count', compute='_compute_zone_count')
+
+    @api.depends('zone_ids')
+    def _compute_zone_count(self):
+        for rec in self:
+            rec.zone_count = len(rec.zone_ids)
+
     @api.constrains('api_id', 'company_id')
     def _check_api_id_unique(self):
         for rec in self:

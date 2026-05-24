@@ -41,6 +41,21 @@ class AccurateZone(models.Model):
         string='Delivery Companies',
     )
 
+    # ── Link to shipping services ─────────────────────────────────────────────
+    # In Accurate Logistics, the price list (which zones+subzones are
+    # available) is tied to the Shipping Service, not just the company.
+    # This M2M lets you record which services this zone belongs to.
+    # Currently dropdowns still filter by company; future API sync will
+    # populate this per-service automatically.
+    service_ids = fields.Many2many(
+        'accurate.service',
+        'accurate_service_zone_rel',
+        'zone_id', 'service_id',
+        string='Shipping Services',
+        help='Which shipping services this zone belongs to. In Accurate '
+             'Logistics, the available zones differ per service price list.',
+    )
+
     @api.constrains('api_id', 'is_subzone')
     def _check_api_id_unique(self):
         for rec in self:
@@ -56,6 +71,57 @@ class AccurateZone(models.Model):
                     'A %s with API ID %d already exists: %s'
                     % ('sub-zone' if rec.is_subzone else 'zone', rec.api_id, duplicate.name)
                 )
+
+    @api.constrains('is_subzone', 'parent_id')
+    def _check_subzone_has_parent(self):
+        for rec in self:
+            if rec.is_subzone and not rec.parent_id:
+                raise ValidationError(
+                    'Sub-zone "%s" must have a Parent Zone.\n'
+                    'يجب تحديد المنطقة الرئيسية للمنطقة الفرعية "%s".'
+                    % (rec.name or '', rec.name or '')
+                )
+
+    # ── Sync subzone ↔ company.subzone_ids relation ──────────────────────────
+    # accurate.delivery.company has TWO M2M tables to accurate.zone:
+    #   - zone_ids   → parent zones   (table accurate_company_zone_rel)
+    #   - subzone_ids → sub-zones      (table accurate_company_subzone_rel)
+    # The user-facing field on accurate.zone (`delivery_company_ids`) only
+    # writes to the FIRST table. When a sub-zone is linked to a company we
+    # must also mirror that link into the company's subzone_ids so the
+    # shipment/wizard dropdowns find it.
+
+    def _sync_subzone_link(self, companies):
+        """Ensure each company has this sub-zone in its subzone_ids, and
+        remove from any company that's no longer selected.
+        """
+        for rec in self:
+            if not rec.is_subzone:
+                continue
+            for company in companies:
+                company.write({'subzone_ids': [(4, rec.id)]})
+            stale = self.env['accurate.delivery.company'].search([
+                ('subzone_ids', 'in', rec.id),
+                ('id', 'not in', companies.ids),
+            ])
+            for company in stale:
+                company.write({'subzone_ids': [(3, rec.id)]})
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        records = super().create(vals_list)
+        for rec in records:
+            if rec.is_subzone and rec.delivery_company_ids:
+                rec._sync_subzone_link(rec.delivery_company_ids)
+        return records
+
+    def write(self, vals):
+        res = super().write(vals)
+        if 'delivery_company_ids' in vals or 'is_subzone' in vals:
+            for rec in self:
+                if rec.is_subzone:
+                    rec._sync_subzone_link(rec.delivery_company_ids)
+        return res
 
     @api.depends('child_ids')
     def _compute_child_count(self):

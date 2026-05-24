@@ -334,3 +334,28 @@ class SaleOrder(models.Model):
                 )
 
         return shipment
+
+    # ── Cancel hook ───────────────────────────────────────────────────────────
+    # When the user cancels the Sale Order directly from Odoo (not via the
+    # shipment cancel wizard), run the local shipment-cancellation cleanup:
+    #   - cancel pending pickings (draft / waiting / confirmed / assigned / ready)
+    #   - create return picking(s) for any pickings already in done state
+    #   - reverse invoice + COD payment + shipping-fee expense
+    # We DO NOT call the Accurate API automatically — the user can hit
+    # "Cancel Shipment" on the shipment form if they want the courier
+    # notified. We only do local Odoo-side cleanup here.
+
+    def _action_cancel(self):
+        for order in self:
+            for ship in order.accurate_shipment_ids:
+                if ship.state in ('draft', 'sent'):
+                    try:
+                        ship.with_context(
+                            accurate_skip_so_cancel=True,
+                        )._on_cancelled()
+                    except Exception as exc:
+                        _logger.warning(
+                            'Accurate Logistics: shipment %s cleanup on SO '
+                            'cancel failed: %s', ship.name, exc,
+                        )
+        return super()._action_cancel()

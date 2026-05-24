@@ -466,17 +466,6 @@ class AccurateShipment(models.Model):
                    % (self.code or self.name),
         )
 
-        # Auto-validate every pending picking on the chain so the warehouse
-        # board shows the goods as delivered to the customer (the courier
-        # already physically did it).
-        try:
-            self._validate_delivery_pickings()
-        except Exception as exc:
-            _logger.warning(
-                'Accurate: auto-validate pickings failed for %s: %s',
-                self.name, exc,
-            )
-
         sale = self.sale_id
         delivery_company = self.delivery_company_id
         if not delivery_company or not delivery_company.journal_id:
@@ -484,8 +473,21 @@ class AccurateShipment(models.Model):
             return
 
         # ── 1. Create invoice ──────────────────────────────────────────────
+        # Wrap _create_invoices in try/except: Odoo raises a UserError when
+        # the product uses "Delivered Quantities" policy and qty_delivered=0
+        # (pickings not validated yet). We log + bail silently instead of
+        # blowing up the whole flow with a modal popup.
+        invoices = self.env['account.move']
         if sale and sale.invoice_status in ('to invoice', 'nothing'):
-            invoices = sale._create_invoices()
+            try:
+                invoices = sale._create_invoices()
+            except Exception as exc:
+                _logger.info(
+                    'Accurate: cannot auto-create invoice for %s yet (%s) — '
+                    'validate the delivery pickings, then click Mark Delivered '
+                    'again.', sale.name, exc,
+                )
+                return
         elif sale and sale.invoice_ids.filtered(lambda i: i.state == 'draft'):
             invoices = sale.invoice_ids.filtered(lambda i: i.state == 'draft')
         else:
@@ -556,6 +558,10 @@ class AccurateShipment(models.Model):
         """When the shipment is marked delivered, auto-validate ONLY the
         outgoing picking (the one going to Partners/Customers).
 
+        Returns True if the outgoing picking was validated (or there was
+        nothing to validate), False if the guardrail blocked it because
+        internal Pick / Pack steps are still pending.
+
         Guardrail: if any internal Pick / Pack step is still NOT done, do
         NOT auto-validate the outgoing — instead, log an activity on the
         outgoing picking pinging the users listed on the Delivery Company's
@@ -579,7 +585,10 @@ class AccurateShipment(models.Model):
             and p.state in ('confirmed', 'waiting', 'assigned')
         )
         if not outgoing:
-            return
+            # Nothing to validate — already done or no outgoing picking. We
+            # return True so the caller proceeds with invoice creation
+            # (Odoo will refuse if qty_delivered is still 0).
+            return True
 
         # Guardrail: are there any internal steps still pending?
         internal_pending = pickings.filtered(
@@ -588,7 +597,7 @@ class AccurateShipment(models.Model):
         )
         if internal_pending:
             self._notify_internal_pick_pending(outgoing, internal_pending)
-            return
+            return False
 
         validated_names = []
         for pick in outgoing:
@@ -648,6 +657,7 @@ class AccurateShipment(models.Model):
                 'Auto-validated picking(s) on delivery: <b>%s</b>.'
                 % ', '.join(validated_names)
             )
+        return True
 
     def _notify_internal_pick_pending(self, outgoing_pickings, internal_pending):
         """Courier says DELIVERED but warehouse hasn't finished internal
@@ -894,13 +904,51 @@ class AccurateShipment(models.Model):
         if company and getattr(company, 'auto_cancel_pickings', True):
             self._cancel_pending_pickings(captured)
 
-        # Cancel the SO BEFORE creating returns — Odoo's SO._action_cancel
-        # cascades to all linked pickings via cancel_propagation rules; if we
-        # created the return first, it would be killed in that cascade.
-        self._cancel_sale_order_if_any(reason=reason)
-
+        # Create returns FIRST while the procurement group is still healthy,
+        # so the new return picking inherits group_id (and therefore stays
+        # linked to the Sale Order's Transfers list).
+        created_returns = self.env['stock.picking']
         if company and getattr(company, 'auto_create_return_picking', True):
-            self._create_return_for_done_pickings(captured, reason)
+            created_returns = self._create_return_for_done_pickings(captured, reason)
+
+        # Then cancel the SO. Skip if we were CALLED from the SO cancel
+        # hook (avoids recursion).
+        if not self.env.context.get('accurate_skip_so_cancel'):
+            self._cancel_sale_order_if_any(reason=reason)
+
+        # Revive any returns the SO cancel cascade killed. They share the
+        # procurement group with the cancelled SO, so Odoo's group-level
+        # cancel cascades to them — we explicitly reset both picking AND
+        # its moves back to draft, then confirm+assign so the warehouse
+        # can receive the goods.
+        for ret in created_returns:
+            ret.invalidate_recordset()
+            if ret.state == 'cancel':
+                try:
+                    # Reset cancelled moves back to draft so action_confirm
+                    # has something to work with. Bypass any tracking guards
+                    # by writing the state directly.
+                    for mv in ret.move_ids:
+                        if mv.state == 'cancel':
+                            mv.write({'state': 'draft'})
+                    ret.write({'state': 'draft'})
+                    ret.action_confirm()
+                    try:
+                        ret.action_assign()
+                    except Exception:
+                        # If nothing to reserve (e.g. no stock yet) the picking
+                        # stays in 'confirmed' — that's fine, warehouse can
+                        # validate it when goods arrive physically.
+                        pass
+                    self._chatter(
+                        'Return picking <b>%s</b> revived after SO cancel '
+                        'cascade — Ready to validate.' % ret.name
+                    )
+                except Exception as exc:
+                    _logger.warning(
+                        'Accurate: could not revive return %s after SO '
+                        'cancel: %s', ret.name, exc,
+                    )
 
     # ── Cancelled: reverse anything that was booked ───────────────────────────
 
@@ -962,13 +1010,51 @@ class AccurateShipment(models.Model):
         if company and getattr(company, 'auto_cancel_pickings', True):
             self._cancel_pending_pickings(captured)
 
-        # Cancel the SO BEFORE creating returns — Odoo's SO._action_cancel
-        # cascades to all linked pickings via cancel_propagation rules; if we
-        # created the return first, it would be killed in that cascade.
-        self._cancel_sale_order_if_any(reason=reason)
-
+        # Create returns FIRST while the procurement group is still healthy,
+        # so the new return picking inherits group_id (and therefore stays
+        # linked to the Sale Order's Transfers list).
+        created_returns = self.env['stock.picking']
         if company and getattr(company, 'auto_create_return_picking', True):
-            self._create_return_for_done_pickings(captured, reason)
+            created_returns = self._create_return_for_done_pickings(captured, reason)
+
+        # Then cancel the SO. Skip if we were CALLED from the SO cancel
+        # hook (avoids recursion).
+        if not self.env.context.get('accurate_skip_so_cancel'):
+            self._cancel_sale_order_if_any(reason=reason)
+
+        # Revive any returns the SO cancel cascade killed. They share the
+        # procurement group with the cancelled SO, so Odoo's group-level
+        # cancel cascades to them — we explicitly reset both picking AND
+        # its moves back to draft, then confirm+assign so the warehouse
+        # can receive the goods.
+        for ret in created_returns:
+            ret.invalidate_recordset()
+            if ret.state == 'cancel':
+                try:
+                    # Reset cancelled moves back to draft so action_confirm
+                    # has something to work with. Bypass any tracking guards
+                    # by writing the state directly.
+                    for mv in ret.move_ids:
+                        if mv.state == 'cancel':
+                            mv.write({'state': 'draft'})
+                    ret.write({'state': 'draft'})
+                    ret.action_confirm()
+                    try:
+                        ret.action_assign()
+                    except Exception:
+                        # If nothing to reserve (e.g. no stock yet) the picking
+                        # stays in 'confirmed' — that's fine, warehouse can
+                        # validate it when goods arrive physically.
+                        pass
+                    self._chatter(
+                        'Return picking <b>%s</b> revived after SO cancel '
+                        'cascade — Ready to validate.' % ret.name
+                    )
+                except Exception as exc:
+                    _logger.warning(
+                        'Accurate: could not revive return %s after SO '
+                        'cancel: %s', ret.name, exc,
+                    )
 
     # ── Reversal helpers (shared between returned + cancelled flows) ──────────
 
@@ -1005,12 +1091,15 @@ class AccurateShipment(models.Model):
             )
             return
         try:
-            # Odoo 19 prefers action_cancel (public). Older versions used
-            # _action_cancel (private). Try public first.
-            if hasattr(sale, 'action_cancel'):
-                sale.action_cancel()
-            elif hasattr(sale, '_action_cancel'):
+            # In Odoo 17/18, sale.action_cancel() opens a confirmation
+            # wizard — it does NOT actually cancel. The private
+            # _action_cancel() is what performs the cancel. Try it first.
+            # Fall back to public action_cancel() for older versions where
+            # _action_cancel doesn't exist or to handle Odoo 19's renames.
+            if hasattr(sale, '_action_cancel'):
                 sale._action_cancel()
+            elif hasattr(sale, 'action_cancel'):
+                sale.action_cancel()
             self._chatter('Sale Order <b>%s</b> cancelled (%s).' % (sale.name, reason))
         except Exception as exc:
             _logger.warning(
@@ -1106,11 +1195,12 @@ class AccurateShipment(models.Model):
         Pack steps would just shuffle stock around inside the warehouse.
         """
         self.ensure_one()
+        created_returns = self.env['stock.picking']
         candidates = pickings.filtered(lambda p: p.state == 'done')
         outgoing_done = candidates.filtered(lambda p: p.picking_type_code == 'outgoing')
         target_pickings = outgoing_done or candidates
         if not target_pickings:
-            return
+            return created_returns
 
         # The 'completed quantity' field on stock.move was renamed across
         # versions: Odoo 19 = `quantity`, Odoo 16-18 = `quantity_done`,
@@ -1175,21 +1265,16 @@ class AccurateShipment(models.Model):
                 new_pid = (action or {}).get('res_id') if isinstance(action, dict) else None
                 new_pick = Picking.browse(new_pid) if new_pid else Picking
                 if new_pick:
-                    # If the source's procurement group belonged to a now-
-                    # cancelled SO, lingering cancel-propagation rules might
-                    # try to cancel this fresh return. Detach it from the
-                    # group to keep it independent.
-                    if 'group_id' in new_pick._fields and new_pick.group_id:
-                        try:
-                            new_pick.group_id = False
-                            for mv in new_pick.move_ids:
-                                if 'group_id' in mv._fields:
-                                    mv.group_id = False
-                        except Exception as exc:
-                            _logger.info(
-                                'Accurate: could not clear group_id on %s: %s',
-                                new_pick.name, exc
-                            )
+                    # Keep the group_id intact so the return picking still
+                    # appears in the Sale Order's Transfers list. Disable
+                    # cancel-propagation on the moves so a sibling SO cancel
+                    # cascade doesn't kill this fresh return.
+                    for mv in new_pick.move_ids:
+                        if 'propagate_cancel' in mv._fields:
+                            try:
+                                mv.propagate_cancel = False
+                            except Exception:
+                                pass
                     # If something already cancelled it, revive it to assigned.
                     if new_pick.state == 'cancel':
                         try:
@@ -1208,6 +1293,7 @@ class AccurateShipment(models.Model):
                          'physically.')
                         % (new_pick.name, src.name, len(return_lines))
                     )
+                    created_returns |= new_pick
                 else:
                     self._chatter(
                         'Return wizard ran for <b>%s</b> but did not return a picking id.'
@@ -1222,6 +1308,7 @@ class AccurateShipment(models.Model):
                     '<b>%s</b>. Please create it manually. Error: %s'
                     % (src.name, exc)
                 )
+        return created_returns
 
     def _reverse_invoice_if_any(self, reason='Shipment reversed'):
         """If an invoice was created for this shipment, reverse it sensibly:

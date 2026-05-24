@@ -42,12 +42,32 @@
           <group>
             <group>
               <field name="name"/>
-              <field name="api_id"/>
               <field name="is_subzone"/>
+              <field name="api_id"
+                     help="Filled automatically when synced from API. Leave empty for manually-created zones."/>
+              <field name="in_price_list" invisible="not is_subzone"/>
             </group>
             <group>
-              <field name="parent_id" invisible="not is_subzone"/>
+              <field name="parent_id"
+                     invisible="not is_subzone"
+                     required="is_subzone"
+                     options="{'no_create': True}"/>
             </group>
+          </group>
+          <group string="Delivery Companies"
+                 help="Pick the delivery companies this zone belongs to. The zone will appear in the recipient zone / sub-zone dropdowns on shipments + sale orders + pickings for those companies.">
+            <field name="delivery_company_ids"
+                   widget="many2many_tags"
+                   nolabel="1"
+                   options="{'no_create': True}"/>
+          </group>
+          <group string="Shipping Services"
+                 help="In Accurate Logistics, available zones differ per service price list. Link this zone to the specific shipping services that include it.">
+            <field name="service_ids"
+                   widget="many2many_tags"
+                   nolabel="1"
+                   options="{'no_create': True}"
+                   domain="[('company_id', 'in', delivery_company_ids)]"/>
           </group>
         </sheet>
       </form>
