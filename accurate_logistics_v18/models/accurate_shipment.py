@@ -422,6 +422,70 @@ class AccurateShipment(models.Model):
                         body='Status updated: <b>%s</b>' % (rec.api_status_name or rec.api_status_code)
                     )
 
+    def action_sync_status_bulk(self):
+        """Bulk status sync for the SELECTED shipments (list-view header
+        button). Unlike action_sync_status it never raises mid-batch:
+        records that aren't ready are skipped, per-record API errors are
+        caught, and when a status actually changes it fires the same
+        delivered / returned / cancelled flows as the cron — so the user
+        can manually catch up shipments the webhook may have missed.
+
+        Shows a summary notification at the end.
+        """
+        synced = changed = skipped = errored = 0
+        for rec in self:
+            # Skip records not sent yet or already in a terminal state.
+            if (not rec.api_id and not rec.code) or not rec.delivery_company_id:
+                skipped += 1
+                continue
+            if rec.state in ('returned', 'cancelled'):
+                skipped += 1
+                continue
+            try:
+                data = rec.delivery_company_id._al_get_shipment(
+                    api_id=rec.api_id, code=rec.code,
+                )
+                if not data:
+                    skipped += 1
+                    continue
+                old_code = rec.api_status_code
+                rec._apply_api_response(data)
+                synced += 1
+                if rec.api_status_code == old_code:
+                    continue
+                changed += 1
+                company = rec.delivery_company_id
+                if company._is_delivered_code(rec.api_status_code) and not rec.invoice_id:
+                    rec._on_delivered()
+                elif company._is_returned_code(rec.api_status_code):
+                    rec._on_returned()
+                elif company._is_cancelled_code(rec.api_status_code):
+                    rec._on_cancelled()
+                else:
+                    rec.message_post(
+                        body='Status updated: <b>%s</b>'
+                             % (rec.api_status_name or rec.api_status_code)
+                    )
+            except Exception as exc:
+                errored += 1
+                _logger.warning(
+                    'Accurate bulk sync failed for %s: %s', rec.name, exc,
+                )
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': 'Sync Complete / اكتملت المزامنة',
+                'message': (
+                    'Synced %d (status changed: %d), skipped %d, errors %d.'
+                    % (synced, changed, skipped, errored)
+                ),
+                'type': 'warning' if errored else 'success',
+                'sticky': bool(errored),
+                'next': {'type': 'ir.actions.act_window_close'},
+            },
+        }
+
     # ── Webhook entry point ───────────────────────────────────────────────────
 
     @api.model

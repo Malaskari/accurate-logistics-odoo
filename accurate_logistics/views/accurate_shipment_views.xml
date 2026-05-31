@@ -11,6 +11,13 @@
             decoration-info="state == 'sent'"
             decoration-danger="state in ('error', 'returned', 'cancelled')"
             decoration-muted="state == 'draft'">
+        <header>
+          <button name="action_sync_status_bulk"
+                  type="object"
+                  string="Sync Status"
+                  class="btn-primary"
+                  display="always"/>
+        </header>
         <field name="name"/>
         <field name="code"/>
         <field name="ref_number"/>
