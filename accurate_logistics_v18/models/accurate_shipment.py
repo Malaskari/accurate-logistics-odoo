@@ -455,6 +455,32 @@ class AccurateShipment(models.Model):
             body='Webhook: status → <b>%s</b> (%s)' % (status_name or status_code, status_code)
         )
 
+        # Extract any cancellation / return reason the courier sent and store
+        # it on the shipment, so the SO status log + chatter show WHY it was
+        # cancelled / returned. Accurate sends it under various keys/shapes.
+        reason_label, reason_notes = self._extract_webhook_reason(payload, shipment_data)
+        if reason_label or reason_notes:
+            vals = {}
+            if reason_notes:
+                vals['cancellation_notes'] = reason_notes
+            if reason_label:
+                # Try to match a synced cancellation-reason record for this
+                # company by name/code so the M2O link is populated too.
+                company = shipment.delivery_company_id
+                Reason = self.env['accurate.cancellation.reason']
+                domain = ['|', ('name', '=', reason_label), ('code', '=', reason_label)]
+                if company:
+                    domain = ['&', ('company_id', '=', company.id)] + domain
+                match = Reason.search(domain, limit=1)
+                if match:
+                    vals['cancellation_reason_id'] = match.id
+                elif not reason_notes:
+                    # No matching record + no separate notes → keep the raw
+                    # label as notes so it's never lost.
+                    vals['cancellation_notes'] = reason_label
+            if vals:
+                shipment.write(vals)
+
         # Dispatch to the right flow based on status family
         company = shipment.delivery_company_id
         if company:
@@ -466,6 +492,45 @@ class AccurateShipment(models.Model):
                 shipment._on_cancelled()
 
         return {'success': True, 'code': code, 'status': status_code}
+
+    @staticmethod
+    def _extract_webhook_reason(payload, shipment_data):
+        """Dig a human-readable reason label + free-text notes out of the
+        webhook payload. Accurate (and its tenants) send this under several
+        possible keys and shapes:
+
+          - payload['cancellationReason'] / ['returnReason'] / ['reason']
+            → either a plain string, or a dict {id, code, name}
+          - payload['notes'] / ['note'] / ['comment'] / ['remark']
+            → free-text notes
+
+        Returns (label, notes) — either may be '' / None.
+        """
+        def _dig(*keys):
+            for src in (shipment_data or {}, payload or {}):
+                for k in keys:
+                    if isinstance(src, dict) and src.get(k):
+                        return src[k]
+            return None
+
+        raw_reason = _dig(
+            'cancellationReason', 'returnReason', 'rejectReason',
+            'reason', 'statusReason',
+        )
+        label = ''
+        if isinstance(raw_reason, dict):
+            label = (raw_reason.get('name')
+                     or raw_reason.get('label')
+                     or raw_reason.get('code')
+                     or '')
+        elif raw_reason:
+            label = str(raw_reason)
+
+        notes = _dig('notes', 'note', 'comment', 'remark', 'description') or ''
+        if notes and not isinstance(notes, str):
+            notes = str(notes)
+
+        return label, notes
 
     # ── COD: invoice + payment on delivery ────────────────────────────────────
 
@@ -903,9 +968,20 @@ class AccurateShipment(models.Model):
             'Reversing COD invoice / payment / shipping-expense, '
             'handling pickings, and cancelling the Sale Order.'
         )
-        # Pull the return reason from the courier's status name (set by
-        # the webhook). Falls back to a generic label if missing.
-        return_reason = self.api_status_name or 'Returned by courier'
+        # Build the return reason from the reason record + notes captured by
+        # the webhook, falling back to the courier's status name.
+        reason_parts = []
+        if self.cancellation_reason_id:
+            reason_parts.append(
+                self.cancellation_reason_id.name
+                or self.cancellation_reason_id.code
+                or ''
+            )
+        if self.cancellation_notes:
+            reason_parts.append(self.cancellation_notes)
+        if not reason_parts:
+            reason_parts.append(self.api_status_name or 'Returned by courier')
+        return_reason = ' — '.join(p for p in reason_parts if p) or '—'
         self._so_status_log(
             en_msg='↩️ Shipment <b>%s</b> returned. Reason: <b>%s</b>.'
                    % (self.code or self.name, return_reason),
