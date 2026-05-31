@@ -392,7 +392,12 @@ class AccurateShipment(models.Model):
         if data.get('trackingUrl'):
             vals['tracking_url'] = data['trackingUrl']
         if data.get('status'):
-            vals['api_status_code'] = data['status'].get('code', '')
+            scode = data['status'].get('code') or ''
+            sid = data['status'].get('id') or ''
+            # Some tenants omit status.code (only id + name). Fall back to the
+            # id so api_status_code is never blank — this also makes the
+            # "did the status change?" check in the cron / bulk-sync work.
+            vals['api_status_code'] = scode or (str(sid) if sid else '')
             vals['api_status_name'] = data['status'].get('name', '')
         for src, dst in [
             ('amount', 'fee_amount'),
