@@ -101,10 +101,10 @@ class AccurateDeliveryCompany(models.Model):
     )
     returned_status_codes = fields.Char(
         'Returned Status Codes',
-        default='RTRN',
+        default='RTRN,RTS',
         help='Comma-separated codes from Accurate that mean the shipment was '
              'returned to sender. Triggers credit-note / cancel-invoice flow. '
-             'Default: RTRN.',
+             'Default: RTRN (Returned) and RTS (ارتجاع للراسل / Return to sender).',
     )
     cancelled_status_codes = fields.Char(
         'Cancelled Status Codes',
