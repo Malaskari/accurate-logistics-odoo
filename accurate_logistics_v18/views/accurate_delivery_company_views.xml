@@ -179,6 +179,21 @@
                    options="{'no_create': True}"
                    help="These users get an activity on the outgoing picking when the courier reports DELIVERED but the internal Pick/Pack step is still not done."/>
           </group>
+          <group string="Automatic Status Sync (Cron)">
+            <group>
+              <field name="cron_sync_enabled"/>
+            </group>
+            <group>
+              <field name="cron_active"/>
+              <field name="cron_interval_minutes"
+                     invisible="not cron_active"/>
+              <div colspan="2" class="text-muted">
+                <i>The scheduler is shared by all delivery companies — turning
+                it on/off or changing the interval here affects every company.
+                Use “Include in Auto-Sync” above to control just this one.</i>
+              </div>
+            </group>
+          </group>
 
           <notebook>
 

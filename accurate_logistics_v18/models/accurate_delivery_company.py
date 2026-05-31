@@ -139,6 +139,67 @@ class AccurateDeliveryCompany(models.Model):
              'NOT auto-validate in that case — these users must reconcile '
              'the warehouse first.',
     )
+
+    # ── Auto-sync cron control ────────────────────────────────────────────────
+    cron_sync_enabled = fields.Boolean(
+        'Include in Auto-Sync',
+        default=True,
+        help="When on, the scheduled status-sync job syncs this company's "
+             "shipments (sent / delivered) and fires the delivered / "
+             "returned / cancelled flows. Turn off to exclude this company.",
+    )
+    cron_active = fields.Boolean(
+        'Auto-Sync Scheduler Running',
+        compute='_compute_cron_settings',
+        inverse='_inverse_cron_active',
+        help='Global on/off switch for the scheduled status-sync job. There '
+             'is ONE shared scheduler, so this affects all companies.',
+    )
+    cron_interval_minutes = fields.Integer(
+        'Run Every (minutes)',
+        compute='_compute_cron_settings',
+        inverse='_inverse_cron_interval',
+        help='How often the scheduled status-sync runs, in minutes. Global '
+             '(shared across all companies). Minimum 1.',
+    )
+
+    def _get_sync_cron(self):
+        """The shared status-sync ir.cron record (or empty)."""
+        return self.env.ref(
+            'accurate_logistics_v18.cron_accurate_sync_statuses',
+            raise_if_not_found=False,
+        )
+
+    @api.depends_context('uid')
+    def _compute_cron_settings(self):
+        cron = self._get_sync_cron()
+        active = bool(cron and cron.active)
+        minutes = 30
+        if cron:
+            num = cron.interval_number or 0
+            if cron.interval_type == 'hours':
+                minutes = num * 60
+            elif cron.interval_type == 'days':
+                minutes = num * 1440
+            else:
+                minutes = num
+        for rec in self:
+            rec.cron_active = active
+            rec.cron_interval_minutes = minutes
+
+    def _inverse_cron_active(self):
+        cron = self._get_sync_cron()
+        if cron:
+            cron.sudo().active = bool(self[:1].cron_active)
+
+    def _inverse_cron_interval(self):
+        cron = self._get_sync_cron()
+        if cron:
+            val = self[:1].cron_interval_minutes or 30
+            cron.sudo().write({
+                'interval_number': max(1, val),
+                'interval_type': 'minutes',
+            })
     default_service_id = fields.Many2one(
         'accurate.service',
         string='Default Shipping Service',

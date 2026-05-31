@@ -1730,9 +1730,17 @@ class AccurateShipment(models.Model):
     def cron_sync_statuses(self):
         # Sync any non-terminal shipment so we also catch returns and
         # cancellations triggered after delivery (e.g. RTRN reached after DTR).
+        # Only sync shipments whose Delivery Company has auto-sync enabled.
+        enabled_companies = self.env['accurate.delivery.company'].search([
+            ('cron_sync_enabled', '=', True),
+        ])
+        if not enabled_companies:
+            _logger.info('Accurate Logistics cron: no companies have auto-sync enabled.')
+            return
         pending = self.search([
             ('state', 'in', ('sent', 'delivered')),
             ('api_id', '!=', False),
+            ('delivery_company_id', 'in', enabled_companies.ids),
         ])
         _logger.info('Accurate Logistics cron: syncing %d shipments.', len(pending))
         for rec in pending:
