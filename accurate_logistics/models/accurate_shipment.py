@@ -456,21 +456,28 @@ class AccurateShipment(models.Model):
                 old_code = rec.api_status_code
                 rec._apply_api_response(data)
                 synced += 1
-                if rec.api_status_code == old_code:
-                    continue
-                changed += 1
+                # State-based dispatch (NOT change-based): fire the flow
+                # whenever the current status maps to a family and the
+                # shipment isn't already in that terminal state. The _on_*
+                # handlers are idempotent (they early-return if already
+                # processed), so this safely catches up shipments whose
+                # status was synced before the flow logic existed.
                 company = rec.delivery_company_id
-                if company._is_delivered_code(rec.api_status_code, rec.api_status_name) and not rec.invoice_id:
-                    rec._on_delivered()
-                elif company._is_returned_code(rec.api_status_code, rec.api_status_name):
-                    rec._on_returned()
-                elif company._is_cancelled_code(rec.api_status_code, rec.api_status_name):
-                    rec._on_cancelled()
-                else:
+                code, name = rec.api_status_code, rec.api_status_name
+                fired = False
+                if company._is_delivered_code(code, name) and not rec.invoice_id and rec.state != 'delivered':
+                    rec._on_delivered(); fired = True
+                elif company._is_returned_code(code, name) and rec.state != 'returned':
+                    rec._on_returned(); fired = True
+                elif company._is_cancelled_code(code, name) and rec.state != 'cancelled':
+                    rec._on_cancelled(); fired = True
+                elif rec.api_status_code != old_code:
                     rec.message_post(
                         body='Status updated: <b>%s</b>'
                              % (rec.api_status_name or rec.api_status_code)
                     )
+                if fired:
+                    changed += 1
             except Exception as exc:
                 errored += 1
                 _logger.warning(
@@ -1735,16 +1742,18 @@ class AccurateShipment(models.Model):
                 data = rec.delivery_company_id._al_get_shipment(api_id=rec.api_id, code=rec.code)
                 if not data:
                     continue
-                old_code = rec.api_status_code
                 rec._apply_api_response(data)
-                if rec.api_status_code == old_code:
-                    continue
+                # State-based dispatch — fire whenever the status maps to a
+                # family and the shipment isn't already in that terminal
+                # state. _on_* handlers are idempotent, so this also catches
+                # up shipments synced before the flow logic existed.
                 company = rec.delivery_company_id
-                if company._is_delivered_code(rec.api_status_code, rec.api_status_name) and not rec.invoice_id:
+                code, name = rec.api_status_code, rec.api_status_name
+                if company._is_delivered_code(code, name) and not rec.invoice_id and rec.state != 'delivered':
                     rec._on_delivered()
-                elif company._is_returned_code(rec.api_status_code, rec.api_status_name):
+                elif company._is_returned_code(code, name) and rec.state != 'returned':
                     rec._on_returned()
-                elif company._is_cancelled_code(rec.api_status_code, rec.api_status_name):
+                elif company._is_cancelled_code(code, name) and rec.state != 'cancelled':
                     rec._on_cancelled()
             except Exception as exc:
                 _logger.warning('Accurate cron: failed for %s: %s', rec.name, exc)
