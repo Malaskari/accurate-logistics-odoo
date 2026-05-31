@@ -455,11 +455,11 @@ class AccurateShipment(models.Model):
                     continue
                 changed += 1
                 company = rec.delivery_company_id
-                if company._is_delivered_code(rec.api_status_code) and not rec.invoice_id:
+                if company._is_delivered_code(rec.api_status_code, rec.api_status_name) and not rec.invoice_id:
                     rec._on_delivered()
-                elif company._is_returned_code(rec.api_status_code):
+                elif company._is_returned_code(rec.api_status_code, rec.api_status_name):
                     rec._on_returned()
-                elif company._is_cancelled_code(rec.api_status_code):
+                elif company._is_cancelled_code(rec.api_status_code, rec.api_status_name):
                     rec._on_cancelled()
                 else:
                     rec.message_post(
@@ -494,13 +494,21 @@ class AccurateShipment(models.Model):
         Called by the webhook controller with the raw JSON payload.
         Extracts shipment code + status and triggers the delivery flow if needed.
         """
-        # Support different payload shapes from Accurate Logistics
+        # Support different payload shapes from Accurate Logistics:
+        #   { "data": { "shipment": {...} } }   ← real tenant shape
+        #   { "shipment": {...} }
+        #   { ...flat... }
+        if isinstance(payload.get('data'), dict):
+            payload = payload['data']
         shipment_data = payload.get('shipment') or payload
         code = shipment_data.get('code') or payload.get('code')
+
         status_obj = shipment_data.get('status') or {}
+        status_id = ''
         if isinstance(status_obj, dict):
             status_code = status_obj.get('code') or payload.get('status', '')
             status_name = status_obj.get('name') or payload.get('statusName', '')
+            status_id = status_obj.get('id') or ''
         else:
             status_code = str(status_obj)
             status_name = payload.get('statusName', '')
@@ -514,9 +522,13 @@ class AccurateShipment(models.Model):
             _logger.warning('Accurate webhook: shipment not found for code %s', code)
             return {'error': 'Shipment not found: %s' % code}
 
-        shipment.write({'api_status_code': status_code, 'api_status_name': status_name})
+        # Some tenants omit status.code entirely (only id + name). Store the
+        # id as the code fallback so api_status_code is never blank.
+        stored_code = status_code or (str(status_id) if status_id else '')
+        shipment.write({'api_status_code': stored_code, 'api_status_name': status_name})
         shipment.message_post(
-            body='Webhook: status → <b>%s</b> (%s)' % (status_name or status_code, status_code)
+            body='Webhook: status → <b>%s</b> (%s)'
+                 % (status_name or stored_code, stored_code or '—')
         )
 
         # Extract any cancellation / return reason the courier sent and store
@@ -545,17 +557,18 @@ class AccurateShipment(models.Model):
             if vals:
                 shipment.write(vals)
 
-        # Dispatch to the right flow based on status family
+        # Dispatch to the right flow based on status family. Match on code
+        # OR name OR id, since some tenants only send id + Arabic name.
         company = shipment.delivery_company_id
         if company:
-            if company._is_delivered_code(status_code):
+            if company._is_delivered_code(status_code, status_name, status_id):
                 shipment._on_delivered()
-            elif company._is_returned_code(status_code):
+            elif company._is_returned_code(status_code, status_name, status_id):
                 shipment._on_returned()
-            elif company._is_cancelled_code(status_code):
+            elif company._is_cancelled_code(status_code, status_name, status_id):
                 shipment._on_cancelled()
 
-        return {'success': True, 'code': code, 'status': status_code}
+        return {'success': True, 'code': code, 'status': stored_code}
 
     @staticmethod
     def _extract_webhook_reason(payload, shipment_data):
@@ -1722,11 +1735,11 @@ class AccurateShipment(models.Model):
                 if rec.api_status_code == old_code:
                     continue
                 company = rec.delivery_company_id
-                if company._is_delivered_code(rec.api_status_code) and not rec.invoice_id:
+                if company._is_delivered_code(rec.api_status_code, rec.api_status_name) and not rec.invoice_id:
                     rec._on_delivered()
-                elif company._is_returned_code(rec.api_status_code):
+                elif company._is_returned_code(rec.api_status_code, rec.api_status_name):
                     rec._on_returned()
-                elif company._is_cancelled_code(rec.api_status_code):
+                elif company._is_cancelled_code(rec.api_status_code, rec.api_status_name):
                     rec._on_cancelled()
             except Exception as exc:
                 _logger.warning('Accurate cron: failed for %s: %s', rec.name, exc)

@@ -841,16 +841,60 @@ class AccurateDeliveryCompany(models.Model):
             'context': {'default_delivery_company_id': self.id},
         }
 
-    # ── Helper ────────────────────────────────────────────────────────────────
+    # ── Status matching ─────────────────────────────────────────────────────
+    #
+    # Some Accurate tenants send the status with only {id, name} and NO code
+    # (e.g. {"id": 475, "name": "ارتجاع للراسل"}). So matching must work on
+    # the code, the name, OR the id. We check the configured comma-separated
+    # list (which can hold codes, Arabic/English names, or numeric ids), with
+    # a substring check on the name, plus built-in Arabic/English keyword
+    # fallbacks so the common statuses work out of the box.
 
-    def _is_delivered_code(self, status_code):
-        codes = [c.strip().upper() for c in (self.delivered_status_codes or '').split(',') if c.strip()]
-        return (status_code or '').upper() in codes
+    _AL_DELIVERED_KEYWORDS = ('تم التسليم', 'تسليم تام', 'سلمت', 'تسلیم',
+                              'DELIVER', 'DTR')
+    _AL_RETURNED_KEYWORDS = ('ارتجاع', 'إرجاع', 'مرتجع', 'راجع', 'مرتد',
+                             'RETURN', 'RTRN', 'RTS')
+    _AL_CANCELLED_KEYWORDS = ('ملغى', 'ملغي', 'إلغاء', 'الغاء', 'ملغاة',
+                              'رفض', 'مرفوض', 'CANCEL', 'REJECT', 'RJCT')
 
-    def _is_returned_code(self, status_code):
-        codes = [c.strip().upper() for c in (self.returned_status_codes or '').split(',') if c.strip()]
-        return (status_code or '').upper() in codes
+    @staticmethod
+    def _al_status_match(configured_csv, keywords, status_code,
+                         status_name=None, status_id=None):
+        """True if the status (by code / name / id) belongs to a family.
 
-    def _is_cancelled_code(self, status_code):
-        codes = [c.strip().upper() for c in (self.cancelled_status_codes or '').split(',') if c.strip()]
-        return (status_code or '').upper() in codes
+        1. Exact match (case-insensitive) of code, name, or id against the
+           configured comma-separated list.
+        2. Substring match of any configured token inside the name.
+        3. Built-in keyword substring fallback on the name.
+        """
+        name_u = (str(status_name) if status_name else '').upper()
+        exact = {str(x).strip().upper() for x in (status_code, status_name, status_id) if x}
+        tokens = [t.strip() for t in (configured_csv or '').split(',') if t.strip()]
+        for tok in tokens:
+            tok_u = tok.upper()
+            if tok_u in exact:
+                return True
+            if name_u and tok_u in name_u:
+                return True
+        for kw in keywords:
+            if name_u and kw.upper() in name_u:
+                return True
+        return False
+
+    def _is_delivered_code(self, status_code, status_name=None, status_id=None):
+        return self._al_status_match(
+            self.delivered_status_codes, self._AL_DELIVERED_KEYWORDS,
+            status_code, status_name, status_id,
+        )
+
+    def _is_returned_code(self, status_code, status_name=None, status_id=None):
+        return self._al_status_match(
+            self.returned_status_codes, self._AL_RETURNED_KEYWORDS,
+            status_code, status_name, status_id,
+        )
+
+    def _is_cancelled_code(self, status_code, status_name=None, status_id=None):
+        return self._al_status_match(
+            self.cancelled_status_codes, self._AL_CANCELLED_KEYWORDS,
+            status_code, status_name, status_id,
+        )
