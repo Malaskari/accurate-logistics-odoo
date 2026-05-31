@@ -1,7 +1,7 @@
 import json
 import logging
 
-from odoo import http
+from odoo import SUPERUSER_ID, http
 from odoo.http import request
 
 _logger = logging.getLogger(__name__)
@@ -67,8 +67,12 @@ class AccurateWebhookController(http.Controller):
         _logger.info('Accurate webhook received: %s', json.dumps(payload)[:500])
 
         # ── 3. Process via model ──────────────────────────────────────────────
+        # auth='none' leaves request.env.uid = None, so .sudo() alone would
+        # give an empty res.users (env.user.lang etc. would raise
+        # "Expected singleton: res.users()"). Bind a real superuser env.
         try:
-            result = request.env['accurate.shipment'].sudo()._process_webhook(payload)
+            env = request.env(user=SUPERUSER_ID)
+            result = env['accurate.shipment']._process_webhook(payload)
         except Exception as exc:
             _logger.exception('Accurate webhook: processing error – %s', exc)
             return _json_response({'error': str(exc)}, status=500)
