@@ -339,7 +339,9 @@ class AccurateShipment(models.Model):
             inp['senderSubzoneId'] = self.sender_subzone_id.api_id
         _set('piecesCount', self.pieces_count)
         _set('returnPiecesCount', self.return_pieces_count)
-        _set('price', self.price)
+        # price is REQUIRED by the API — always send it, even when 0 (the
+        # _set helper would otherwise drop a 0 value as "empty").
+        inp['price'] = self.price or 0.0
         _set('description', self.description)
         _set('notes', self.notes)
 

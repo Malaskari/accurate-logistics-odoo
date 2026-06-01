@@ -277,10 +277,13 @@ class SaleOrder(models.Model):
         )[:1]
 
         # Decide collection rule based on invoice state:
-        #   - No invoice OR invoice not paid → courier collects full amount (COD).
-        #   - Invoice paid (incl. in_payment) → send price=0, paymentTypeCode=PAID.
-        #   - Invoice partially paid → send remaining residual as price.
-        # This lets EzonePay-prepaid orders ship without double-collection.
+        # `price` is the DECLARED PARCEL VALUE — always the real goods value,
+        # never 0 (Accurate requires it). Whether the courier COLLECTS money
+        # is controlled by paymentTypeCode, not by zeroing the price:
+        #   - No invoice / unpaid → COLC: collect the full amount (COD).
+        #   - Invoice fully paid (e.g. EzonePay prepaid) → CASH (already paid):
+        #     keep the declared value but collect NOTHING.
+        #   - Invoice partially paid → COLC, collect only the residual.
         price = self.amount_total
         payment_type_code = self.accurate_payment_type_code or 'COLC'
         invoice = self.invoice_ids.filtered(
@@ -289,10 +292,12 @@ class SaleOrder(models.Model):
         if invoice:
             payment_state = invoice.payment_state
             if payment_state in ('paid', 'in_payment', 'reversed'):
-                price = 0.0
-                payment_type_code = 'PAID'
+                # Already paid → declared value stays, courier collects nothing.
+                payment_type_code = 'CASH'
             elif payment_state == 'partial':
-                price = invoice.amount_residual
+                # Collect only what's still owed.
+                price = invoice.amount_residual or self.amount_total
+                payment_type_code = 'COLC'
 
         shipment_vals = {
             'sale_id': self.id,
