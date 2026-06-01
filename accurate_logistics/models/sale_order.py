@@ -277,27 +277,25 @@ class SaleOrder(models.Model):
         )[:1]
 
         # Decide collection rule based on invoice state:
-        # `price` is the DECLARED PARCEL VALUE — always the real goods value,
-        # never 0 (Accurate requires it). Whether the courier COLLECTS money
-        # is controlled by paymentTypeCode, not by zeroing the price:
-        #   - No invoice / unpaid → COLC: collect the full amount (COD).
-        #   - Invoice fully paid (e.g. EzonePay prepaid) → CASH (already paid):
-        #     keep the declared value but collect NOTHING.
-        #   - Invoice partially paid → COLC, collect only the residual.
+        # This tenant only offers ONE payment type: COLC (واجبة التحصيل / COD).
+        # There is NO "prepaid / already-paid" payment type, so the only way
+        # to make the courier collect NOTHING on a prepaid order is to send
+        # the COD amount (`price`) as 0. `price` here = the amount the courier
+        # collects on delivery:
+        #   - No invoice / unpaid → price = full amount (collect full COD).
+        #   - Invoice fully paid (e.g. EzonePay prepaid) → price = 0 (collect nothing).
+        #   - Invoice partially paid → price = residual (collect only what's owed).
         price = self.amount_total
-        payment_type_code = self.accurate_payment_type_code or 'COLC'
+        payment_type_code = 'COLC'
         invoice = self.invoice_ids.filtered(
             lambda i: i.state == 'posted' and i.move_type == 'out_invoice'
         )[:1]
         if invoice:
             payment_state = invoice.payment_state
             if payment_state in ('paid', 'in_payment', 'reversed'):
-                # Already paid → declared value stays, courier collects nothing.
-                payment_type_code = 'CASH'
+                price = 0.0
             elif payment_state == 'partial':
-                # Collect only what's still owed.
                 price = invoice.amount_residual or self.amount_total
-                payment_type_code = 'COLC'
 
         shipment_vals = {
             'sale_id': self.id,
