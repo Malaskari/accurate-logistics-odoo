@@ -82,21 +82,51 @@ class StockPicking(models.Model):
         copy=False,
         index=True,
     )
+    # These resolve the shipment from THIS picking's direct link OR — if not
+    # set (e.g. the sibling pick/ship step of a 2-step delivery) — from the
+    # Sale Order's shipment, so the code/status/tracking show on EVERY picking
+    # in the chain, not only the dispatch one.
     accurate_shipment_code = fields.Char(
-        related='accurate_shipment_id.code',
         string='Shipment Code',
-        readonly=True,
+        compute='_compute_accurate_shipment_info',
     )
     accurate_status = fields.Char(
-        related='accurate_shipment_id.api_status_name',
         string='Delivery Status',
-        readonly=True,
+        compute='_compute_accurate_shipment_info',
     )
     accurate_tracking_url = fields.Char(
-        related='accurate_shipment_id.tracking_url',
         string='Tracking URL',
-        readonly=True,
+        compute='_compute_accurate_shipment_info',
     )
+
+    def _accurate_resolve_shipment(self):
+        """Shipment for this picking: direct link first, else the linked
+        Sale Order's shipment."""
+        self.ensure_one()
+        if self.accurate_shipment_id:
+            return self.accurate_shipment_id
+        sale = getattr(self, 'sale_id', False)
+        if sale and sale.accurate_shipment_ids:
+            return sale.accurate_shipment_ids[:1]
+        return self.env['accurate.shipment']
+
+    @api.depends(
+        'accurate_shipment_id',
+        'accurate_shipment_id.code',
+        'accurate_shipment_id.api_status_name',
+        'accurate_shipment_id.tracking_url',
+        'sale_id',
+        'sale_id.accurate_shipment_ids',
+        'sale_id.accurate_shipment_ids.code',
+        'sale_id.accurate_shipment_ids.api_status_name',
+        'sale_id.accurate_shipment_ids.tracking_url',
+    )
+    def _compute_accurate_shipment_info(self):
+        for rec in self:
+            ship = rec._accurate_resolve_shipment()
+            rec.accurate_shipment_code = ship.code or ''
+            rec.accurate_status = ship.api_status_name or ''
+            rec.accurate_tracking_url = ship.tracking_url or ''
 
     # ── First-step detection (multi-step delivery aware) ──────────────────────
 
