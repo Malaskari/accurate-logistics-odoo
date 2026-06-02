@@ -1,11 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
 
+  <!-- Transfers list: add Shipment Code column -->
+  <record id="stock_picking_view_tree_accurate" model="ir.ui.view">
+    <field name="name">stock.picking.tree.accurate.logistics</field>
+    <field name="model">stock.picking</field>
+    <field name="inherit_id" ref="stock.vpicktree"/>
+    <field name="arch" type="xml">
+      <xpath expr="//field[@name='origin']" position="after">
+        <field name="accurate_shipment_code" string="Shipment" optional="show"/>
+      </xpath>
+    </field>
+  </record>
+
   <record id="stock_picking_view_form_accurate" model="ir.ui.view">
     <field name="name">stock.picking.form.accurate.logistics</field>
     <field name="model">stock.picking</field>
     <field name="inherit_id" ref="stock.view_picking_form"/>
     <field name="arch" type="xml">
+
+      <!-- Shipment code next to Source Document on the main form -->
+      <xpath expr="//field[@name='origin']" position="after">
+        <field name="accurate_shipment_code"
+               string="Shipment Code"
+               readonly="1"
+               invisible="not accurate_shipment_code"/>
+      </xpath>
 
       <!-- Show on the FIRST picking of the delivery chain.
            For 1-step delivery: the outgoing picking.
