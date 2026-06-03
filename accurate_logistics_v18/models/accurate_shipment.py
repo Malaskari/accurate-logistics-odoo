@@ -503,6 +503,47 @@ class AccurateShipment(models.Model):
     # ── Webhook entry point ───────────────────────────────────────────────────
 
     @api.model
+    def _webhook_secret_valid(self, received, payload):
+        """Validate the incoming webhook secret. Accepts when `received`
+        matches:
+          - the secret of the Delivery Company that owns the shipment in the
+            payload (strict, preferred), OR
+          - the global secret (ir.config_parameter), as fallback, OR
+          - any configured company secret (when the shipment isn't found yet).
+        If NO secret is configured anywhere → open mode (allow), preserving
+        the original behaviour for un-configured installs.
+        """
+        Param = self.env['ir.config_parameter'].sudo()
+        global_secret = Param.get_param('accurate_logistics.webhook_secret', '') or ''
+
+        companies = self.env['accurate.delivery.company'].sudo().search([
+            ('webhook_secret', '!=', False),
+        ])
+        company_secrets = {c.webhook_secret for c in companies if c.webhook_secret}
+
+        # Nothing configured anywhere → don't block (open mode).
+        if not global_secret and not company_secrets:
+            return True
+        if not received:
+            return False
+
+        # Try to scope strictly to the shipment's own company.
+        data = payload.get('data') if isinstance(payload.get('data'), dict) else payload
+        shipment_data = {}
+        code = None
+        if isinstance(data, dict):
+            shipment_data = data.get('shipment') if isinstance(data.get('shipment'), dict) else data
+            code = (shipment_data or {}).get('code') or data.get('code')
+        if code:
+            shipment = self.search([('code', '=', code)], limit=1)
+            company = shipment.delivery_company_id if shipment else False
+            if company and company.webhook_secret:
+                return received in (company.webhook_secret, global_secret)
+
+        # Shipment not found / its company has no secret → accept any valid one.
+        return received == global_secret or received in company_secrets
+
+    @api.model
     def _process_webhook(self, payload):
         """
         Called by the webhook controller with the raw JSON payload.

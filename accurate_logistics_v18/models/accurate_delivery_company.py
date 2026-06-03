@@ -1,5 +1,6 @@
 import logging
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from odoo import api, fields, models
@@ -200,6 +201,49 @@ class AccurateDeliveryCompany(models.Model):
                 'interval_number': max(1, val),
                 'interval_type': 'minutes',
             })
+
+    # ── Per-company webhook ───────────────────────────────────────────────────
+    webhook_secret = fields.Char(
+        'Webhook Secret',
+        copy=False,
+        help='Secret token for this company\'s webhook. Paste the Callback '
+             'URL below into THIS company\'s Accurate Logistics dashboard. '
+             'Each company has its own secret so a leak of one does not '
+             'expose the others.',
+    )
+    webhook_url = fields.Char(
+        'Callback URL',
+        compute='_compute_webhook_url',
+        help='Copy this and set it as the Callback URL in this company\'s '
+             'Accurate Logistics account.',
+    )
+
+    @api.depends('webhook_secret')
+    def _compute_webhook_url(self):
+        base = self.env['ir.config_parameter'].sudo().get_param('web.base.url', '')
+        for rec in self:
+            if rec.webhook_secret:
+                rec.webhook_url = '%s/accurate/webhook?secret=%s' % (base, rec.webhook_secret)
+            else:
+                rec.webhook_url = ''
+
+    def action_generate_webhook_secret(self):
+        self.ensure_one()
+        self.webhook_secret = uuid.uuid4().hex
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': 'Webhook Secret Generated',
+                'message': (
+                    'New secret generated for %s. Copy the Callback URL and '
+                    'paste it into this company\'s Accurate Logistics dashboard.'
+                ) % self.name,
+                'type': 'success',
+                'sticky': True,
+            },
+        }
+
     default_service_id = fields.Many2one(
         'accurate.service',
         string='Default Shipping Service',

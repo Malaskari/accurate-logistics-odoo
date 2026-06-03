@@ -36,23 +36,7 @@ class AccurateWebhookController(http.Controller):
                 status=status,
             )
 
-        # ── 1. Validate secret token ──────────────────────────────────────────
-        expected_secret = (
-            request.env['ir.config_parameter']
-            .sudo()
-            .get_param('accurate_logistics.webhook_secret', '')
-        )
-        if expected_secret:
-            received = (
-                request.httprequest.args.get('secret')
-                or request.httprequest.headers.get('X-Webhook-Secret')
-                or request.httprequest.headers.get('Authorization', '').replace('Bearer ', '')
-            )
-            if received != expected_secret:
-                _logger.warning('Accurate webhook: invalid secret token received.')
-                return _json_response({'error': 'Unauthorized'}, status=401)
-
-        # ── 2. Parse JSON body ────────────────────────────────────────────────
+        # ── 1. Parse JSON body ────────────────────────────────────────────────
         try:
             raw = request.httprequest.data
             payload = json.loads(raw) if raw else {}
@@ -66,12 +50,25 @@ class AccurateWebhookController(http.Controller):
 
         _logger.info('Accurate webhook received: %s', json.dumps(payload)[:500])
 
-        # ── 3. Process via model ──────────────────────────────────────────────
         # auth='none' leaves request.env.uid = None, so .sudo() alone would
         # give an empty res.users (env.user.lang etc. would raise
         # "Expected singleton: res.users()"). Bind a real superuser env.
+        env = request.env(user=SUPERUSER_ID)
+
+        # ── 2. Validate secret token ──────────────────────────────────────────
+        # Per-company: the secret must match the Delivery Company that owns
+        # the shipment in this payload (global secret kept as fallback).
+        received = (
+            request.httprequest.args.get('secret')
+            or request.httprequest.headers.get('X-Webhook-Secret')
+            or request.httprequest.headers.get('Authorization', '').replace('Bearer ', '')
+        )
+        if not env['accurate.shipment']._webhook_secret_valid(received, payload):
+            _logger.warning('Accurate webhook: invalid secret token received.')
+            return _json_response({'error': 'Unauthorized'}, status=401)
+
+        # ── 3. Process via model ──────────────────────────────────────────────
         try:
-            env = request.env(user=SUPERUSER_ID)
             result = env['accurate.shipment']._process_webhook(payload)
         except Exception as exc:
             _logger.exception('Accurate webhook: processing error – %s', exc)

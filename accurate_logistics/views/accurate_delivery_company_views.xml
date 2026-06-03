@@ -194,6 +194,22 @@
               </div>
             </group>
           </group>
+          <group string="Webhook (this company)">
+            <div colspan="2" class="text-muted">
+              <i>Generate a secret, then paste the Callback URL below into
+              THIS company's Accurate Logistics dashboard. Each company has
+              its own secret.</i>
+            </div>
+            <field name="webhook_secret" readonly="1"
+                   placeholder="Click “Generate Secret” →"/>
+            <button name="action_generate_webhook_secret"
+                    string="Generate Secret"
+                    type="object"
+                    class="btn-secondary"/>
+            <field name="webhook_url" readonly="1"
+                   invisible="not webhook_secret"
+                   widget="CopyClipboardChar"/>
+          </group>
 
           <notebook>
 
