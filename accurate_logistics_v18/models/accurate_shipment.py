@@ -467,8 +467,11 @@ class AccurateShipment(models.Model):
                 company = rec.delivery_company_id
                 code, name = rec.api_status_code, rec.api_status_name
                 fired = False
-                if company._is_delivered_code(code, name) and not rec.invoice_id and rec.state != 'delivered':
-                    rec._on_delivered(); fired = True
+                # _on_delivered is idempotent — call it even if already
+                # delivered so a stuck outgoing picking gets validated.
+                if company._is_delivered_code(code, name):
+                    rec._on_delivered()
+                    fired = rec.state != 'delivered' or not rec.invoice_id
                 elif company._is_returned_code(code, name) and rec.state != 'returned':
                     rec._on_returned(); fired = True
                 elif company._is_cancelled_code(code, name) and rec.state != 'cancelled':
@@ -657,9 +660,11 @@ class AccurateShipment(models.Model):
             shipment.write(vals)
 
         # ── Dispatch (state-based; match on code OR name OR id) ───────────────
+        # _on_delivered is idempotent (re-validates pending pickings, invoices
+        # only once) so we call it even if already delivered — this catches up
+        # an outgoing picking that was still pending at the first DTR event.
         if company:
-            if company._is_delivered_code(stored_code, status_name, status_id) \
-                    and not shipment.invoice_id and shipment.state != 'delivered':
+            if company._is_delivered_code(stored_code, status_name, status_id):
                 shipment._on_delivered()
             elif company._is_returned_code(stored_code, status_name, status_id) \
                     and shipment.state != 'returned':
@@ -718,21 +723,31 @@ class AccurateShipment(models.Model):
         """
         self.ensure_one()
 
-        if self.invoice_id:
-            _logger.info('Accurate: shipment %s already has invoice %s, skipping.', self.name, self.invoice_id.name)
-            return
-
-        # Mark as delivered first — even if invoicing fails we still
-        # want the state to reflect the courier's truth.
+        # Mark as delivered + log only the FIRST time (idempotent re-runs).
         if self.state != 'delivered':
             self.state = 'delivered'
+            self._so_status_log(
+                en_msg='✅ Shipment <b>%s</b> delivered to the customer.'
+                       % (self.code or self.name),
+                ar_msg='✅ تم تسليم الشحنة <b>%s</b> إلى العميل.'
+                       % (self.code or self.name),
+            )
 
-        self._so_status_log(
-            en_msg='✅ Shipment <b>%s</b> delivered to the customer.'
-                   % (self.code or self.name),
-            ar_msg='✅ تم تسليم الشحنة <b>%s</b> إلى العميل.'
-                   % (self.code or self.name),
-        )
+        # ALWAYS attempt to validate the outgoing picking — even on re-runs.
+        # This catches the case where the internal Pick/Pack step was
+        # completed AFTER the delivery event (the guardrail blocked it the
+        # first time, then the warehouse finished the internal step later).
+        try:
+            self._validate_delivery_pickings()
+        except Exception as exc:
+            _logger.warning(
+                'Accurate: auto-validate pickings failed for %s: %s',
+                self.name, exc,
+            )
+
+        # Invoice already created on a previous run → nothing more to do.
+        if self.invoice_id:
+            return
 
         sale = self.sale_id
         delivery_company = self.delivery_company_id

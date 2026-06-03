@@ -209,7 +209,34 @@ class StockPicking(models.Model):
                         'Accurate Logistics: auto-create failed for %s: %s',
                         picking.name, exc,
                     )
+
+        # If an INTERNAL step just completed and its shipment is already
+        # marked delivered by the courier, validate the outgoing picking that
+        # was waiting (the guardrail had skipped it at delivery time because
+        # this internal step wasn't done yet).
+        for picking in self:
+            try:
+                picking._accurate_validate_outgoing_if_delivered()
+            except Exception as exc:
+                _logger.warning(
+                    'Accurate Logistics: post-done outgoing validation failed '
+                    'for %s: %s', picking.name, exc,
+                )
         return res
+
+    def _accurate_validate_outgoing_if_delivered(self):
+        """When a non-outgoing picking is validated, if the linked shipment is
+        already 'delivered', trigger validation of the still-pending outgoing
+        picking via the shipment's own helper."""
+        self.ensure_one()
+        if self.picking_type_code == 'outgoing':
+            return
+        sale = getattr(self, 'sale_id', False)
+        ship = sale.accurate_shipment_ids[:1] if sale else False
+        if not ship and self.accurate_shipment_id:
+            ship = self.accurate_shipment_id
+        if ship and ship.state == 'delivered':
+            ship._validate_delivery_pickings()
 
     # ── Manual dispatch button ────────────────────────────────────────────────
 
