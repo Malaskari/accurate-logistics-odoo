@@ -549,24 +549,36 @@ class AccurateShipment(models.Model):
         Called by the webhook controller with the raw JSON payload.
         Extracts shipment code + status and triggers the delivery flow if needed.
         """
-        # Support different payload shapes from Accurate Logistics:
-        #   { "data": { "shipment": {...} } }   ← real tenant shape
-        #   { "shipment": {...} }
-        #   { ...flat... }
+        # ── Parse the payload ─────────────────────────────────────────────────
+        # The REAL Accurate webhook is FLAT and uses its own field names:
+        #   { "shipmentId": 515572, "shipmentCode": "Y034051",
+        #     "typeCode": "SHP_STATUS_UPDATE",
+        #     "shipmentStatusCode": "RITS",          ← the status CODE
+        #     "cancellationReasonId": null, "returnTypeCode": null,
+        #     "deliveredAmount": "0", "notes": null }
+        # We also keep back-compat for the GraphQL-style nested shape
+        #   { "data": { "shipment": { "code": ..., "status": {id,code,name} } } }
         if isinstance(payload.get('data'), dict):
             payload = payload['data']
-        shipment_data = payload.get('shipment') or payload
-        code = shipment_data.get('code') or payload.get('code')
+        shipment_data = payload.get('shipment') if isinstance(payload.get('shipment'), dict) else payload
 
-        status_obj = shipment_data.get('status') or {}
-        status_id = ''
-        if isinstance(status_obj, dict):
-            status_code = status_obj.get('code') or payload.get('status', '')
-            status_name = status_obj.get('name') or payload.get('statusName', '')
-            status_id = status_obj.get('id') or ''
-        else:
-            status_code = str(status_obj)
-            status_name = payload.get('statusName', '')
+        code = (
+            payload.get('shipmentCode')
+            or shipment_data.get('shipmentCode')
+            or shipment_data.get('code')
+            or payload.get('code')
+        )
+
+        # Status code: webhook = shipmentStatusCode; GraphQL = status.code / name / id
+        status_obj = shipment_data.get('status') if isinstance(shipment_data.get('status'), dict) else {}
+        status_code = (
+            payload.get('shipmentStatusCode')
+            or shipment_data.get('shipmentStatusCode')
+            or status_obj.get('code')
+            or ''
+        )
+        status_name = status_obj.get('name') or payload.get('statusName') or ''
+        status_id = status_obj.get('id') or ''
 
         if not code:
             _logger.warning('Accurate webhook: no shipment code in payload %s', payload)
@@ -577,27 +589,61 @@ class AccurateShipment(models.Model):
             _logger.warning('Accurate webhook: shipment not found for code %s', code)
             return {'error': 'Shipment not found: %s' % code}
 
-        # Some tenants omit status.code entirely (only id + name). Store the
-        # id as the code fallback so api_status_code is never blank.
+        company = shipment.delivery_company_id
+
+        # The webhook only carries the status CODE, not the Arabic name.
+        # Best-effort: pull the full record from the API to get the friendly
+        # name + latest fees. Keep the webhook's code as authoritative for
+        # matching (the GraphQL response often omits status.code).
+        if not status_name and company and (shipment.api_id or shipment.code):
+            try:
+                data = company._al_get_shipment(api_id=shipment.api_id, code=shipment.code)
+                if data:
+                    st = data.get('status') or {}
+                    status_name = st.get('name') or status_name
+                    if not status_code:
+                        status_code = st.get('code') or (str(st.get('id')) if st.get('id') else '')
+                    for src, dst in [
+                        ('amount', 'fee_amount'),
+                        ('deliveryFees', 'fee_delivery'),
+                        ('collectionFees', 'fee_collection'),
+                        ('totalAmount', 'fee_total'),
+                    ]:
+                        if data.get(src) is not None:
+                            shipment[dst] = data[src]
+            except Exception as exc:
+                _logger.info('Accurate webhook: refresh fetch failed for %s: %s', code, exc)
+
         stored_code = status_code or (str(status_id) if status_id else '')
-        shipment.write({'api_status_code': stored_code, 'api_status_name': status_name})
+        shipment.write({
+            'api_status_code': stored_code,
+            'api_status_name': status_name or stored_code,
+        })
         shipment.message_post(
             body='Webhook: status → <b>%s</b> (%s)'
                  % (status_name or stored_code, stored_code or '—')
         )
 
-        # Extract any cancellation / return reason the courier sent and store
-        # it on the shipment, so the SO status log + chatter show WHY it was
-        # cancelled / returned. Accurate sends it under various keys/shapes.
-        reason_label, reason_notes = self._extract_webhook_reason(payload, shipment_data)
-        if reason_label or reason_notes:
-            vals = {}
-            if reason_notes:
+        # ── Capture cancellation / return reason ──────────────────────────────
+        vals = {}
+        # Webhook: cancellationReasonId (an id) → look up the synced reason.
+        reason_id = payload.get('cancellationReasonId') or shipment_data.get('cancellationReasonId')
+        if reason_id:
+            reason = self.env['accurate.cancellation.reason'].search(
+                [('api_id', '=', reason_id)], limit=1,
+            )
+            if reason:
+                vals['cancellation_reason_id'] = reason.id
+        # Free-text notes (webhook 'notes', or nested shapes).
+        notes = payload.get('notes') or shipment_data.get('notes')
+        if notes:
+            vals['cancellation_notes'] = notes
+        # Back-compat: nested cancellationReason {name} shape.
+        if not vals.get('cancellation_reason_id'):
+            reason_label, reason_notes = self._extract_webhook_reason(payload, shipment_data)
+            if reason_notes and not vals.get('cancellation_notes'):
                 vals['cancellation_notes'] = reason_notes
             if reason_label:
-                # Try to match a synced cancellation-reason record for this
-                # company by name/code so the M2O link is populated too.
-                company = shipment.delivery_company_id
                 Reason = self.env['accurate.cancellation.reason']
                 domain = ['|', ('name', '=', reason_label), ('code', '=', reason_label)]
                 if company:
@@ -605,22 +651,21 @@ class AccurateShipment(models.Model):
                 match = Reason.search(domain, limit=1)
                 if match:
                     vals['cancellation_reason_id'] = match.id
-                elif not reason_notes:
-                    # No matching record + no separate notes → keep the raw
-                    # label as notes so it's never lost.
+                elif not vals.get('cancellation_notes'):
                     vals['cancellation_notes'] = reason_label
-            if vals:
-                shipment.write(vals)
+        if vals:
+            shipment.write(vals)
 
-        # Dispatch to the right flow based on status family. Match on code
-        # OR name OR id, since some tenants only send id + Arabic name.
-        company = shipment.delivery_company_id
+        # ── Dispatch (state-based; match on code OR name OR id) ───────────────
         if company:
-            if company._is_delivered_code(status_code, status_name, status_id):
+            if company._is_delivered_code(stored_code, status_name, status_id) \
+                    and not shipment.invoice_id and shipment.state != 'delivered':
                 shipment._on_delivered()
-            elif company._is_returned_code(status_code, status_name, status_id):
+            elif company._is_returned_code(stored_code, status_name, status_id) \
+                    and shipment.state != 'returned':
                 shipment._on_returned()
-            elif company._is_cancelled_code(status_code, status_name, status_id):
+            elif company._is_cancelled_code(stored_code, status_name, status_id) \
+                    and shipment.state != 'cancelled':
                 shipment._on_cancelled()
 
         return {'success': True, 'code': code, 'status': stored_code}
