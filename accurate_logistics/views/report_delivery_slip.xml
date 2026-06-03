@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+  <!-- Add the Accurate shipment code + scannable barcode to the
+       Delivery Slip report, just under the document title. -->
+  <template id="report_delivery_document_accurate_barcode"
+            inherit_id="stock.report_delivery_document">
+    <xpath expr="//div[@id='informations']" position="before">
+      <div t-if="o.accurate_shipment_code"
+           class="text-center mb-3"
+           name="accurate_shipment_barcode">
+        <div><strong>Accurate Shipment</strong></div>
+        <img t-att-src="'/report/barcode/Code128/' + o.accurate_shipment_code"
+             style="width:320px;height:60px;"
+             alt="Shipment Barcode"/>
+        <div style="font-size:14px;letter-spacing:2px;">
+          <span t-out="o.accurate_shipment_code"/>
+        </div>
+      </div>
+    </xpath>
+  </template>
+
+</odoo>

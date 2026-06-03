@@ -42,6 +42,7 @@ Other features
         'wizard/cancel_shipment_wizard_views.xml',
         'views/sale_order_views.xml',
         'views/stock_picking_views.xml',
+        'views/report_delivery_slip.xml',
         'views/menus.xml',
     ],
     'installable': True,
