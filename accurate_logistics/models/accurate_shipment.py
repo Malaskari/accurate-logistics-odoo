@@ -203,6 +203,16 @@ class AccurateShipment(models.Model):
                 )
         return super().create(vals_list)
 
+    def message_post(self, **kwargs):
+        # Our programmatic chatter bodies are plain `str` containing HTML
+        # (e.g. "Status → <b>RTS</b>"). Odoo 18 escapes a plain str body, so
+        # the literal tags show up. Wrap in Markup so the HTML renders. UI
+        # messages already arrive as sanitized HTML, so wrapping is harmless.
+        body = kwargs.get('body')
+        if isinstance(body, str) and not isinstance(body, Markup):
+            kwargs['body'] = Markup(body)
+        return super().message_post(**kwargs)
+
     # ── Sale Order status log ─────────────────────────────────────────────────
     #
     # The shipment chatter keeps the detailed technical timeline (every
