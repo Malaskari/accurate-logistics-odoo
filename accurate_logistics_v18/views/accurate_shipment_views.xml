@@ -156,8 +156,9 @@
             </group>
           </group>
 
-          <!-- Cancellation -->
-          <group string="Cancellation" invisible="state not in ('cancelled', 'returned')">
+          <!-- Reason (cancellation / failed-delivery / return) -->
+          <group string="Reason"
+                 invisible="not cancellation_reason_id and not cancellation_notes">
             <field name="cancellation_reason_id" readonly="1"/>
             <field name="cancellation_notes" readonly="1"/>
           </group>

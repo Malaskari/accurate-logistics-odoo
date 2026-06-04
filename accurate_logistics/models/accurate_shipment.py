@@ -409,6 +409,22 @@ class AccurateShipment(models.Model):
         ]:
             if data.get(src) is not None:
                 vals[dst] = data[src]
+        # Capture the cancellation / failed-delivery / return reason. The full
+        # API record carries it as cancellationReason {id, name} even for a
+        # failed-delivery (DEX) — the webhook itself usually doesn't.
+        reason = data.get('cancellationReason')
+        if isinstance(reason, dict) and (reason.get('id') or reason.get('name')):
+            rname = reason.get('name') or ''
+            rid = reason.get('id')
+            match = False
+            if rid:
+                match = self.env['accurate.cancellation.reason'].search(
+                    [('api_id', '=', rid)], limit=1,
+                )
+            if match:
+                vals['cancellation_reason_id'] = match.id
+            elif rname:
+                vals['cancellation_notes'] = rname
         if vals:
             self.write(vals)
 
@@ -598,6 +614,7 @@ class AccurateShipment(models.Model):
         # Best-effort: pull the full record from the API to get the friendly
         # name + latest fees. Keep the webhook's code as authoritative for
         # matching (the GraphQL response often omits status.code).
+        refreshed_reason = None  # cancellationReason {id, name} from the API
         if not status_name and company and (shipment.api_id or shipment.code):
             try:
                 data = company._al_get_shipment(api_id=shipment.api_id, code=shipment.code)
@@ -614,6 +631,10 @@ class AccurateShipment(models.Model):
                     ]:
                         if data.get(src) is not None:
                             shipment[dst] = data[src]
+                    # The full record carries the reason even for failed
+                    # deliveries (DEX) where the webhook sends none.
+                    if isinstance(data.get('cancellationReason'), dict):
+                        refreshed_reason = data['cancellationReason']
             except Exception as exc:
                 _logger.info('Accurate webhook: refresh fetch failed for %s: %s', code, exc)
 
@@ -627,16 +648,21 @@ class AccurateShipment(models.Model):
                  % (status_name or stored_code, stored_code or '—')
         )
 
-        # ── Capture cancellation / return reason ──────────────────────────────
+        # ── Capture cancellation / failed-delivery / return reason ────────────
         vals = {}
-        # Webhook: cancellationReasonId (an id) → look up the synced reason.
+        # 1) Webhook: cancellationReasonId (an id) → look up the synced reason.
         reason_id = payload.get('cancellationReasonId') or shipment_data.get('cancellationReasonId')
+        # 2) API refresh: cancellationReason {id, name} (covers DEX etc.).
+        if not reason_id and refreshed_reason:
+            reason_id = refreshed_reason.get('id')
         if reason_id:
             reason = self.env['accurate.cancellation.reason'].search(
                 [('api_id', '=', reason_id)], limit=1,
             )
             if reason:
                 vals['cancellation_reason_id'] = reason.id
+            elif refreshed_reason and refreshed_reason.get('name'):
+                vals['cancellation_notes'] = refreshed_reason['name']
         # Free-text notes (webhook 'notes', or nested shapes).
         notes = payload.get('notes') or shipment_data.get('notes')
         if notes:
