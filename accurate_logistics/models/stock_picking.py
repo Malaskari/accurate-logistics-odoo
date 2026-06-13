@@ -89,6 +89,7 @@ class StockPicking(models.Model):
     accurate_shipment_code = fields.Char(
         string='Shipment Code',
         compute='_compute_accurate_shipment_info',
+        search='_search_accurate_shipment_code',
     )
     accurate_status = fields.Char(
         string='Delivery Status',
@@ -127,6 +128,17 @@ class StockPicking(models.Model):
             rec.accurate_shipment_code = ship.code or ''
             rec.accurate_status = ship.api_status_name or ''
             rec.accurate_tracking_url = ship.tracking_url or ''
+
+    def _search_accurate_shipment_code(self, operator, value):
+        """Make the computed shipment code searchable: match pickings linked
+        to a shipment whose code matches, either directly or via the SO."""
+        shipments = self.env['accurate.shipment'].search([('code', operator, value)])
+        if not shipments:
+            return [('id', '=', 0)]
+        sale_ids = shipments.mapped('sale_id').ids
+        return ['|',
+                ('accurate_shipment_id', 'in', shipments.ids),
+                ('sale_id', 'in', sale_ids)]
 
     # ── First-step detection (multi-step delivery aware) ──────────────────────
 

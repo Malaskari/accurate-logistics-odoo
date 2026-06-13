@@ -13,6 +13,18 @@
     </field>
   </record>
 
+  <!-- Transfers search: filter by Shipment Code -->
+  <record id="stock_picking_view_search_accurate" model="ir.ui.view">
+    <field name="name">stock.picking.search.accurate.logistics</field>
+    <field name="model">stock.picking</field>
+    <field name="inherit_id" ref="stock.view_picking_internal_search"/>
+    <field name="arch" type="xml">
+      <xpath expr="//field[@name='origin']" position="after">
+        <field name="accurate_shipment_code" string="Shipment Code"/>
+      </xpath>
+    </field>
+  </record>
+
   <record id="stock_picking_view_form_accurate" model="ir.ui.view">
     <field name="name">stock.picking.form.accurate.logistics</field>
     <field name="model">stock.picking</field>
