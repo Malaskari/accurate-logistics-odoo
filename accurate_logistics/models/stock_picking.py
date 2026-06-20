@@ -100,6 +100,17 @@ class StockPicking(models.Model):
         compute='_compute_accurate_shipment_info',
     )
 
+    # Salesperson who created the linked Sale Order — surfaced on the Transfers
+    # list so warehouse / dispatch staff can see who sold each order. Stored so
+    # it is sortable and group-able directly in the list and search views.
+    accurate_salesperson_id = fields.Many2one(
+        'res.users',
+        string='Salesperson',
+        related='sale_id.user_id',
+        store=True,
+        index=True,
+    )
+
     def _accurate_resolve_shipment(self):
         """Shipment for this picking: direct link first, else the linked
         Sale Order's shipment."""
