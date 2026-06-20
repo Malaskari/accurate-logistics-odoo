@@ -1,11 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
 
-  <!-- Add the Accurate shipment code + scannable barcode to the
-       Delivery Slip report, just under the document title. -->
+  <!-- Add the Delivery Company logo + Accurate shipment code & scannable
+       barcode to the Delivery Slip report, just under the document title.
+       The company is resolved from the picking's direct link, else from the
+       linked shipment / Sale Order, so it shows on every picking step. -->
   <template id="report_delivery_document_accurate_barcode"
             inherit_id="stock.report_delivery_document">
     <xpath expr="//div[@id='informations']" position="before">
+      <t t-set="al_company"
+         t-value="o.accurate_delivery_company_id or o._accurate_resolve_shipment().delivery_company_id"/>
+      <div t-if="al_company.logo"
+           class="text-center mb-2" name="accurate_company_logo">
+        <img t-att-src="image_data_uri(al_company.logo)"
+             style="max-height:70px;max-width:200px;"
+             alt="Delivery Company Logo"/>
+        <div t-if="al_company.name" class="text-muted">
+          <span t-out="al_company.name"/>
+        </div>
+      </div>
       <div t-if="o.accurate_shipment_code"
            class="text-center mb-3"
            name="accurate_shipment_barcode">
