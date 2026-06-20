@@ -43,7 +43,6 @@ Other features
         'views/sale_order_views.xml',
         'views/stock_picking_views.xml',
         'views/report_delivery_slip.xml',
-        'views/report_company_logo.xml',
         'views/menus.xml',
     ],
     'installable': True,
