@@ -21,6 +21,11 @@ class AccurateDeliveryCompany(models.Model):
     name = fields.Char('Company Name', required=True, tracking=True)
     active = fields.Boolean('Active', default=True)
     notes = fields.Text('Notes')
+    logo = fields.Image(
+        'Logo', max_width=512, max_height=512,
+        help='Logo for this delivery company. Shown on the Sale Order and '
+             'Invoice PDF reports when this company handles the order.',
+    )
 
     # ── API Connection (per company) ──────────────────────────────────────────
 
