@@ -1,33 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
 
-  <!-- Show the Delivery Company logo on the Sale Order PDF -->
+  <!-- Delivery Company logo, top-right of the Sale Order PDF (next to the
+       company logo in the header). -->
   <template id="report_saleorder_accurate_logo"
             inherit_id="sale.report_saleorder_document">
-    <xpath expr="//div[hasclass('page')]" position="inside">
-      <div t-if="doc.accurate_delivery_company_id.logo"
-           class="text-center mt-4" name="accurate_company_logo">
-        <p class="text-muted mb-1">Delivered by
-          <span t-field="doc.accurate_delivery_company_id.name"/>
-        </p>
-        <img t-att-src="image_data_uri(doc.accurate_delivery_company_id.logo)"
-             style="max-height:80px;" alt="Delivery Company Logo"/>
-      </div>
+    <xpath expr="//div[hasclass('page')]/*[1]" position="before">
+      <img t-if="doc.accurate_delivery_company_id.logo"
+           t-att-src="image_data_uri(doc.accurate_delivery_company_id.logo)"
+           class="float-end"
+           style="max-height:55px;max-width:160px;"
+           alt="Delivery Company Logo"/>
     </xpath>
   </template>
 
-  <!-- Show the Delivery Company logo on the Invoice PDF -->
+  <!-- Delivery Company logo, top-right of the Invoice PDF. -->
   <template id="report_invoice_accurate_logo"
             inherit_id="account.report_invoice_document">
-    <xpath expr="//div[hasclass('page')]" position="inside">
-      <div t-if="o.accurate_delivery_company_id.logo"
-           class="text-center mt-4" name="accurate_company_logo">
-        <p class="text-muted mb-1">Delivered by
-          <span t-field="o.accurate_delivery_company_id.name"/>
-        </p>
-        <img t-att-src="image_data_uri(o.accurate_delivery_company_id.logo)"
-             style="max-height:80px;" alt="Delivery Company Logo"/>
-      </div>
+    <xpath expr="//div[hasclass('page')]/*[1]" position="before">
+      <img t-if="o.accurate_delivery_company_id.logo"
+           t-att-src="image_data_uri(o.accurate_delivery_company_id.logo)"
+           class="float-end"
+           style="max-height:55px;max-width:160px;"
+           alt="Delivery Company Logo"/>
     </xpath>
   </template>
 
