@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+  <!-- Show the Delivery Company logo NEXT TO the company logo in the report
+       header (bold layout). Guarded so it only renders for records that have
+       a delivery company with a logo (Sale Order, Invoice, Picking …). -->
+  <template id="external_layout_bold_accurate_logo"
+            inherit_id="web.external_layout_bold">
+    <xpath expr="//img[hasclass('o_company_logo_big')]" position="after">
+      <img t-if="o and 'accurate_delivery_company_id' in o._fields and o.accurate_delivery_company_id and o.accurate_delivery_company_id.logo"
+           t-att-src="image_data_uri(o.accurate_delivery_company_id.logo)"
+           style="max-height:45px;max-width:150px;margin-left:12px;"
+           alt="Delivery Company Logo"/>
+    </xpath>
+  </template>
+
+</odoo>
