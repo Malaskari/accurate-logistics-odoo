@@ -1,15 +1,121 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
 
-  <!-- Show the Delivery Company logo at the TOP-RIGHT of the report header
-       (bold layout), beside the company address block. Guarded so it only
-       renders for records that have a delivery company with a logo. For
-       pickings without the field set directly, resolve via the linked
-       shipment / Sale Order. -->
+  <!-- Show the Delivery Company logo at the TOP-RIGHT of the report header,
+       beside the company address block, on EVERY standard document layout
+       (Light/Standard, Boxed, Bold, Striped, Folder, Wave, Bubble).
+
+       The header template is chosen by the company's "Document Layout" setting,
+       so the logo MUST be injected into each layout — otherwise switching the
+       layout (e.g. Bold -> Wave) makes the delivery logo disappear.
+
+       Each block is guarded so it only renders for records that actually carry
+       a delivery company (sale.order / account.move / stock.picking). For a
+       picking without the field set directly, it resolves via the linked
+       shipment / Sale Order. `o` is always defined here (web.external_layout
+       sets it from `doc`); we also check hasattr(o, '_fields') because these
+       layouts render on every PDF in the system. -->
+
+  <template id="external_layout_standard_accurate_logo"
+            inherit_id="web.external_layout_standard">
+    <xpath expr="//ul[@name='company_address_list']" position="before">
+      <t t-if="o and hasattr(o, '_fields') and 'accurate_delivery_company_id' in o._fields">
+        <t t-set="al_dc" t-value="o.accurate_delivery_company_id"/>
+        <t t-if="not al_dc and hasattr(o, '_accurate_resolve_shipment')"
+           t-set="al_dc" t-value="o._accurate_resolve_shipment().delivery_company_id"/>
+        <img t-if="al_dc and al_dc.logo"
+             class="o_company_logo_big float-end"
+             t-att-src="image_data_uri(al_dc.logo)"
+             style="max-height:130px;max-width:260px;"
+             alt="Delivery Company Logo"/>
+      </t>
+    </xpath>
+  </template>
+
+  <template id="external_layout_boxed_accurate_logo"
+            inherit_id="web.external_layout_boxed">
+    <xpath expr="//ul[@name='company_address_list']" position="before">
+      <t t-if="o and hasattr(o, '_fields') and 'accurate_delivery_company_id' in o._fields">
+        <t t-set="al_dc" t-value="o.accurate_delivery_company_id"/>
+        <t t-if="not al_dc and hasattr(o, '_accurate_resolve_shipment')"
+           t-set="al_dc" t-value="o._accurate_resolve_shipment().delivery_company_id"/>
+        <img t-if="al_dc and al_dc.logo"
+             class="o_company_logo_big float-end"
+             t-att-src="image_data_uri(al_dc.logo)"
+             style="max-height:130px;max-width:260px;"
+             alt="Delivery Company Logo"/>
+      </t>
+    </xpath>
+  </template>
+
   <template id="external_layout_bold_accurate_logo"
             inherit_id="web.external_layout_bold">
     <xpath expr="//ul[@name='company_address_list']" position="before">
-      <t t-if="o and 'accurate_delivery_company_id' in o._fields">
+      <t t-if="o and hasattr(o, '_fields') and 'accurate_delivery_company_id' in o._fields">
+        <t t-set="al_dc" t-value="o.accurate_delivery_company_id"/>
+        <t t-if="not al_dc and hasattr(o, '_accurate_resolve_shipment')"
+           t-set="al_dc" t-value="o._accurate_resolve_shipment().delivery_company_id"/>
+        <img t-if="al_dc and al_dc.logo"
+             class="o_company_logo_big float-end"
+             t-att-src="image_data_uri(al_dc.logo)"
+             style="max-height:130px;max-width:260px;"
+             alt="Delivery Company Logo"/>
+      </t>
+    </xpath>
+  </template>
+
+  <template id="external_layout_striped_accurate_logo"
+            inherit_id="web.external_layout_striped">
+    <xpath expr="//ul[@name='company_address_list']" position="before">
+      <t t-if="o and hasattr(o, '_fields') and 'accurate_delivery_company_id' in o._fields">
+        <t t-set="al_dc" t-value="o.accurate_delivery_company_id"/>
+        <t t-if="not al_dc and hasattr(o, '_accurate_resolve_shipment')"
+           t-set="al_dc" t-value="o._accurate_resolve_shipment().delivery_company_id"/>
+        <img t-if="al_dc and al_dc.logo"
+             class="o_company_logo_big float-end"
+             t-att-src="image_data_uri(al_dc.logo)"
+             style="max-height:130px;max-width:260px;"
+             alt="Delivery Company Logo"/>
+      </t>
+    </xpath>
+  </template>
+
+  <template id="external_layout_folder_accurate_logo"
+            inherit_id="web.external_layout_folder">
+    <xpath expr="//ul[@name='company_address_list']" position="before">
+      <t t-if="o and hasattr(o, '_fields') and 'accurate_delivery_company_id' in o._fields">
+        <t t-set="al_dc" t-value="o.accurate_delivery_company_id"/>
+        <t t-if="not al_dc and hasattr(o, '_accurate_resolve_shipment')"
+           t-set="al_dc" t-value="o._accurate_resolve_shipment().delivery_company_id"/>
+        <img t-if="al_dc and al_dc.logo"
+             class="o_company_logo_big float-end"
+             t-att-src="image_data_uri(al_dc.logo)"
+             style="max-height:130px;max-width:260px;"
+             alt="Delivery Company Logo"/>
+      </t>
+    </xpath>
+  </template>
+
+  <template id="external_layout_wave_accurate_logo"
+            inherit_id="web.external_layout_wave">
+    <xpath expr="//ul[@name='company_address_list']" position="before">
+      <t t-if="o and hasattr(o, '_fields') and 'accurate_delivery_company_id' in o._fields">
+        <t t-set="al_dc" t-value="o.accurate_delivery_company_id"/>
+        <t t-if="not al_dc and hasattr(o, '_accurate_resolve_shipment')"
+           t-set="al_dc" t-value="o._accurate_resolve_shipment().delivery_company_id"/>
+        <img t-if="al_dc and al_dc.logo"
+             class="o_company_logo_big float-end"
+             t-att-src="image_data_uri(al_dc.logo)"
+             style="max-height:130px;max-width:260px;"
+             alt="Delivery Company Logo"/>
+      </t>
+    </xpath>
+  </template>
+
+  <template id="external_layout_bubble_accurate_logo"
+            inherit_id="web.external_layout_bubble">
+    <xpath expr="//ul[@name='company_address_list']" position="before">
+      <t t-if="o and hasattr(o, '_fields') and 'accurate_delivery_company_id' in o._fields">
         <t t-set="al_dc" t-value="o.accurate_delivery_company_id"/>
         <t t-if="not al_dc and hasattr(o, '_accurate_resolve_shipment')"
            t-set="al_dc" t-value="o._accurate_resolve_shipment().delivery_company_id"/>
