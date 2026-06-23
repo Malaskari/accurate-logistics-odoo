@@ -31,6 +31,7 @@
       <t t-set="al_zone" t-value="o.accurate_recipient_zone_id or al_ship.recipient_zone_id"/>
       <t t-set="al_subzone" t-value="o.accurate_recipient_subzone_id or al_ship.recipient_subzone_id"/>
       <t t-set="al_phone" t-value="o.partner_id.phone or al_ship.recipient_phone or al_ship.recipient_mobile"/>
+      <t t-set="al_currency" t-value="o.sale_id.currency_id or o.company_id.currency_id"/>
 
       <div class="col-auto" name="div_accurate_salesperson" t-if="o.accurate_salesperson_id">
         <strong>Salesperson:</strong>
@@ -47,6 +48,16 @@
       <div class="col-auto" name="div_accurate_phone" t-if="al_phone">
         <strong>Phone:</strong>
         <p class="m-0" t-out="al_phone"/>
+      </div>
+      <div class="col-auto" name="div_accurate_delivery_fees" t-if="al_ship">
+        <strong>Delivery Fees:</strong>
+        <p class="m-0" t-out="al_ship.fee_delivery"
+           t-options="{'widget': 'monetary', 'display_currency': al_currency}"/>
+      </div>
+      <div class="col-auto" name="div_accurate_so_total" t-if="o.sale_id">
+        <strong>Order Total:</strong>
+        <p class="m-0" t-out="o.sale_id.amount_total"
+           t-options="{'widget': 'monetary', 'display_currency': o.sale_id.currency_id}"/>
       </div>
     </xpath>
   </template>
