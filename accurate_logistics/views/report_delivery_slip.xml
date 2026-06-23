@@ -21,63 +21,43 @@
       </div>
     </xpath>
 
-    <!-- Extra fields rendered INSIDE the native info block, so they sit in the
-         layout's own info box (the rounded box on Wave/Folder/Bubble) instead of
-         a box of our own. A full-width col-12 pushes them onto their own line
-         below Order/Date/Operator; inside, two borderless columns keep each label
-         with its value (RTL-safe). o_ignore_layout_styling + border-0 suppress the
-         layout's striped-table lines. Zone/sub-zone fall back to the linked
-         shipment; phone uses the shipment's recipient phone (Char in 18 AND 19)
-         rather than partner.mobile (removed in 19). -->
-    <xpath expr="//div[@id='informations']" position="inside">
+    <!-- Extra fields as a full-width table BELOW the native info block, styled
+         like the product table (it inherits the layout's table styling), so it
+         reads as one organised table instead of cramped columns squeezed into
+         the info box. 4 columns = two label/value pairs per row. Zone/sub-zone
+         fall back to the linked shipment; phone uses the shipment's recipient
+         phone (Char in 18 AND 19) rather than partner.mobile (removed in 19). -->
+    <xpath expr="//div[@id='informations']" position="after">
       <t t-set="al_ship" t-value="o._accurate_resolve_shipment()"/>
       <t t-set="al_zone" t-value="o.accurate_recipient_zone_id or al_ship.recipient_zone_id"/>
       <t t-set="al_subzone" t-value="o.accurate_recipient_subzone_id or al_ship.recipient_subzone_id"/>
       <t t-set="al_phone" t-value="o.partner_id.phone or al_ship.recipient_phone or al_ship.recipient_mobile"/>
       <t t-set="al_currency" t-value="o.sale_id.currency_id or o.company_id.currency_id"/>
-      <div class="col-12 mt-2" name="accurate_extra_info"
-           t-if="o.accurate_salesperson_id or al_zone or al_subzone or al_phone or al_ship or o.sale_id">
-        <div class="row">
-          <div class="col-6">
-            <table class="o_ignore_layout_styling table table-sm table-borderless mb-0">
-              <tbody>
-                <tr t-if="o.accurate_salesperson_id">
-                  <td class="border-0 py-1 pe-4 text-nowrap align-top"><strong>Salesperson</strong></td>
-                  <td class="border-0 py-1 align-top" t-out="o.accurate_salesperson_id.name"/>
-                </tr>
-                <tr t-if="al_zone">
-                  <td class="border-0 py-1 pe-4 text-nowrap align-top"><strong>Zone</strong></td>
-                  <td class="border-0 py-1 align-top" t-out="al_zone.name"/>
-                </tr>
-                <tr t-if="al_subzone">
-                  <td class="border-0 py-1 pe-4 text-nowrap align-top"><strong>Sub-zone</strong></td>
-                  <td class="border-0 py-1 align-top" t-out="al_subzone.name"/>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div class="col-6">
-            <table class="o_ignore_layout_styling table table-sm table-borderless mb-0">
-              <tbody>
-                <tr t-if="al_phone">
-                  <td class="border-0 py-1 pe-4 text-nowrap align-top"><strong>Phone</strong></td>
-                  <td class="border-0 py-1 align-top" t-out="al_phone"/>
-                </tr>
-                <tr t-if="al_ship">
-                  <td class="border-0 py-1 pe-4 text-nowrap align-top"><strong>Delivery Fees</strong></td>
-                  <td class="border-0 py-1 align-top"><span t-out="al_ship.fee_delivery"
-                       t-options="{'widget': 'monetary', 'display_currency': al_currency}"/></td>
-                </tr>
-                <tr t-if="o.sale_id">
-                  <td class="border-0 py-1 pe-4 text-nowrap align-top"><strong>Order Total</strong></td>
-                  <td class="border-0 py-1 align-top"><span t-out="o.sale_id.amount_total"
-                       t-options="{'widget': 'monetary', 'display_currency': o.sale_id.currency_id}"/></td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
+      <table class="table table-sm mt-2 mb-4" name="accurate_extra_info"
+             t-if="o.accurate_salesperson_id or al_zone or al_subzone or al_phone or al_ship or o.sale_id">
+        <tbody>
+          <tr>
+            <td class="py-2 pe-3 text-nowrap"><strong>Salesperson</strong></td>
+            <td class="py-2" t-out="o.accurate_salesperson_id.name"/>
+            <td class="py-2 pe-3 text-nowrap"><strong>Phone</strong></td>
+            <td class="py-2" t-out="al_phone"/>
+          </tr>
+          <tr>
+            <td class="py-2 pe-3 text-nowrap"><strong>Zone</strong></td>
+            <td class="py-2" t-out="al_zone.name"/>
+            <td class="py-2 pe-3 text-nowrap"><strong>Delivery Fees</strong></td>
+            <td class="py-2"><span t-out="al_ship.fee_delivery"
+                 t-options="{'widget': 'monetary', 'display_currency': al_currency}"/></td>
+          </tr>
+          <tr>
+            <td class="py-2 pe-3 text-nowrap"><strong>Sub-zone</strong></td>
+            <td class="py-2" t-out="al_subzone.name"/>
+            <td class="py-2 pe-3 text-nowrap"><strong>Order Total</strong></td>
+            <td class="py-2"><span t-out="o.sale_id.amount_total"
+                 t-options="{'widget': 'monetary', 'display_currency': o.sale_id.currency_id}"/></td>
+          </tr>
+        </tbody>
+      </table>
     </xpath>
   </template>
 
