@@ -32,45 +32,49 @@
       <t t-set="al_subzone" t-value="o.accurate_recipient_subzone_id or al_ship.recipient_subzone_id"/>
       <t t-set="al_phone" t-value="o.partner_id.phone or al_ship.recipient_phone or al_ship.recipient_mobile"/>
       <t t-set="al_currency" t-value="o.sale_id.currency_id or o.company_id.currency_id"/>
-      <div class="row mb-3" name="accurate_extra_info"
+      <div class="row mb-3 align-items-stretch" name="accurate_extra_info"
            t-if="o.accurate_salesperson_id or al_zone or al_subzone or al_phone or al_ship or o.sale_id">
         <div class="col-6">
-          <table class="table table-sm table-borderless mb-0">
-            <tbody>
-              <tr t-if="o.accurate_salesperson_id">
-                <td class="py-0 w-50"><strong>Salesperson</strong></td>
-                <td class="py-0" t-out="o.accurate_salesperson_id.name"/>
-              </tr>
-              <tr t-if="al_zone">
-                <td class="py-0 w-50"><strong>Zone</strong></td>
-                <td class="py-0" t-out="al_zone.name"/>
-              </tr>
-              <tr t-if="al_subzone">
-                <td class="py-0 w-50"><strong>Sub-zone</strong></td>
-                <td class="py-0" t-out="al_subzone.name"/>
-              </tr>
-            </tbody>
-          </table>
+          <div class="border rounded p-3 h-100">
+            <table class="o_ignore_layout_styling table table-sm table-borderless mb-0">
+              <tbody>
+                <tr t-if="o.accurate_salesperson_id">
+                  <td class="border-0 py-1 pe-4 text-nowrap align-top"><strong>Salesperson</strong></td>
+                  <td class="border-0 py-1 align-top" t-out="o.accurate_salesperson_id.name"/>
+                </tr>
+                <tr t-if="al_zone">
+                  <td class="border-0 py-1 pe-4 text-nowrap align-top"><strong>Zone</strong></td>
+                  <td class="border-0 py-1 align-top" t-out="al_zone.name"/>
+                </tr>
+                <tr t-if="al_subzone">
+                  <td class="border-0 py-1 pe-4 text-nowrap align-top"><strong>Sub-zone</strong></td>
+                  <td class="border-0 py-1 align-top" t-out="al_subzone.name"/>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
         <div class="col-6">
-          <table class="table table-sm table-borderless mb-0">
-            <tbody>
-              <tr t-if="al_phone">
-                <td class="py-0 w-50"><strong>Phone</strong></td>
-                <td class="py-0" t-out="al_phone"/>
-              </tr>
-              <tr t-if="al_ship">
-                <td class="py-0 w-50"><strong>Delivery Fees</strong></td>
-                <td class="py-0"><span t-out="al_ship.fee_delivery"
-                     t-options="{'widget': 'monetary', 'display_currency': al_currency}"/></td>
-              </tr>
-              <tr t-if="o.sale_id">
-                <td class="py-0 w-50"><strong>Order Total</strong></td>
-                <td class="py-0"><span t-out="o.sale_id.amount_total"
-                     t-options="{'widget': 'monetary', 'display_currency': o.sale_id.currency_id}"/></td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="border rounded p-3 h-100">
+            <table class="o_ignore_layout_styling table table-sm table-borderless mb-0">
+              <tbody>
+                <tr t-if="al_phone">
+                  <td class="border-0 py-1 pe-4 text-nowrap align-top"><strong>Phone</strong></td>
+                  <td class="border-0 py-1 align-top" t-out="al_phone"/>
+                </tr>
+                <tr t-if="al_ship">
+                  <td class="border-0 py-1 pe-4 text-nowrap align-top"><strong>Delivery Fees</strong></td>
+                  <td class="border-0 py-1 align-top"><span t-out="al_ship.fee_delivery"
+                       t-options="{'widget': 'monetary', 'display_currency': al_currency}"/></td>
+                </tr>
+                <tr t-if="o.sale_id">
+                  <td class="border-0 py-1 pe-4 text-nowrap align-top"><strong>Order Total</strong></td>
+                  <td class="border-0 py-1 align-top"><span t-out="o.sale_id.amount_total"
+                       t-options="{'widget': 'monetary', 'display_currency': o.sale_id.currency_id}"/></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </xpath>
