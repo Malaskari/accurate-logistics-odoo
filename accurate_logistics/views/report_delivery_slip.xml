@@ -20,6 +20,35 @@
         </div>
       </div>
     </xpath>
+
+    <!-- Extra meta fields in the info block: Salesperson (from the linked Sale
+         Order), recipient Zone + Sub-zone, and the customer phone. Sources are
+         resolved robustly: zone/sub-zone fall back to the linked shipment, and
+         the phone uses the shipment's recipient_phone/recipient_mobile (Char,
+         present in Odoo 18 AND 19) rather than partner.mobile (removed in 19). -->
+    <xpath expr="//div[@id='informations']" position="inside">
+      <t t-set="al_ship" t-value="o._accurate_resolve_shipment()"/>
+      <t t-set="al_zone" t-value="o.accurate_recipient_zone_id or al_ship.recipient_zone_id"/>
+      <t t-set="al_subzone" t-value="o.accurate_recipient_subzone_id or al_ship.recipient_subzone_id"/>
+      <t t-set="al_phone" t-value="o.partner_id.phone or al_ship.recipient_phone or al_ship.recipient_mobile"/>
+
+      <div class="col-auto" name="div_accurate_salesperson" t-if="o.accurate_salesperson_id">
+        <strong>Salesperson:</strong>
+        <p class="m-0" t-out="o.accurate_salesperson_id.name"/>
+      </div>
+      <div class="col-auto" name="div_accurate_zone" t-if="al_zone">
+        <strong>Zone:</strong>
+        <p class="m-0" t-out="al_zone.name"/>
+      </div>
+      <div class="col-auto" name="div_accurate_subzone" t-if="al_subzone">
+        <strong>Sub-zone:</strong>
+        <p class="m-0" t-out="al_subzone.name"/>
+      </div>
+      <div class="col-auto" name="div_accurate_phone" t-if="al_phone">
+        <strong>Phone:</strong>
+        <p class="m-0" t-out="al_phone"/>
+      </div>
+    </xpath>
   </template>
 
 </odoo>
