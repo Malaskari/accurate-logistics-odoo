@@ -21,21 +21,24 @@
       </div>
     </xpath>
 
-    <!-- Extra info as a clean two-column table AFTER the native info block.
-         Rendered as a table (not loose flex columns) so each label stays with
-         its value — RTL-safe for Arabic zone names. Zone/sub-zone fall back to
-         the linked shipment; phone uses the shipment's recipient phone (Char,
-         present in Odoo 18 AND 19) rather than partner.mobile (gone in 19). -->
-    <xpath expr="//div[@id='informations']" position="after">
+    <!-- Extra fields rendered INSIDE the native info block, so they sit in the
+         layout's own info box (the rounded box on Wave/Folder/Bubble) instead of
+         a box of our own. A full-width col-12 pushes them onto their own line
+         below Order/Date/Operator; inside, two borderless columns keep each label
+         with its value (RTL-safe). o_ignore_layout_styling + border-0 suppress the
+         layout's striped-table lines. Zone/sub-zone fall back to the linked
+         shipment; phone uses the shipment's recipient phone (Char in 18 AND 19)
+         rather than partner.mobile (removed in 19). -->
+    <xpath expr="//div[@id='informations']" position="inside">
       <t t-set="al_ship" t-value="o._accurate_resolve_shipment()"/>
       <t t-set="al_zone" t-value="o.accurate_recipient_zone_id or al_ship.recipient_zone_id"/>
       <t t-set="al_subzone" t-value="o.accurate_recipient_subzone_id or al_ship.recipient_subzone_id"/>
       <t t-set="al_phone" t-value="o.partner_id.phone or al_ship.recipient_phone or al_ship.recipient_mobile"/>
       <t t-set="al_currency" t-value="o.sale_id.currency_id or o.company_id.currency_id"/>
-      <div class="row mb-3 align-items-stretch" name="accurate_extra_info"
+      <div class="col-12 mt-2" name="accurate_extra_info"
            t-if="o.accurate_salesperson_id or al_zone or al_subzone or al_phone or al_ship or o.sale_id">
-        <div class="col-6">
-          <div class="border rounded p-3 h-100">
+        <div class="row">
+          <div class="col-6">
             <table class="o_ignore_layout_styling table table-sm table-borderless mb-0">
               <tbody>
                 <tr t-if="o.accurate_salesperson_id">
@@ -53,9 +56,7 @@
               </tbody>
             </table>
           </div>
-        </div>
-        <div class="col-6">
-          <div class="border rounded p-3 h-100">
+          <div class="col-6">
             <table class="o_ignore_layout_styling table table-sm table-borderless mb-0">
               <tbody>
                 <tr t-if="al_phone">
