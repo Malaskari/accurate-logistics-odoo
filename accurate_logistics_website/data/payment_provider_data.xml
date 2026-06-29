@@ -13,6 +13,7 @@
         <field name="state">disabled</field>
         <field name="is_published" eval="False"/>
         <field name="company_id" ref="base.main_company"/>
+        <field name="image_128" type="base64" file="accurate_logistics_website/static/img/cash_on_delivery.png"/>
         <field name="redirect_form_view_id" ref="payment_custom.redirect_form"/>
         <field name="pending_msg">Your order is confirmed. Please pay the total amount in cash to the courier when your package is delivered.</field>
         <field name="payment_method_ids"
