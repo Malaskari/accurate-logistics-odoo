@@ -5,15 +5,15 @@ import { rpc } from "@web/core/network/rpc";
 /**
  * Accurate Logistics checkout zone picker — self-initializing, no widget.
  *
- * The new website checkout (Interaction `#shop_checkout`) delegates click
- * handlers (carrier select, address card) on the checkout root, and re-renders
- * `#o_delivery_form` on some of them — which would destroy our open <select>.
- * We stop click + mousedown originating inside `.o_accurate_zone_picker` in the
- * CAPTURE phase (before those bubble-phase handlers run), leaving the <select>'s
- * own open/pick behaviour intact.
+ * The zone picker is rendered once below the delivery-methods list. We still
+ * guard against the carrier-row click delegation by stopping click + mousedown
+ * that originate inside `.o_accurate_zone_picker` in the CAPTURE phase, leaving
+ * the <select>'s own open/pick behaviour intact.
+ *
+ *  - Zone change    → filter the Sub-zone options client-side (data-parent-id).
+ *  - Sub-zone change → POST to /accurate/website/set_recipient, then reload so
+ *    the recomputed delivery fee + totals show.
  */
-
-console.log("[AL] checkout zone script loaded");
 
 function _picker(target) {
     return target && target.closest ? target.closest(".o_accurate_zone_picker") : null;
@@ -21,7 +21,6 @@ function _picker(target) {
 
 const _stop = (ev) => {
     if (_picker(ev.target)) {
-        console.log("[AL] stop", ev.type, "on", ev.target.className);
         ev.stopPropagation();
     }
 };
@@ -33,7 +32,6 @@ document.addEventListener("change", async (ev) => {
     if (!picker) {
         return;
     }
-    console.log("[AL] change on", ev.target.className, "value", ev.target.value);
     const zoneSel = picker.querySelector("select.o_accurate_zone");
     const subSel = picker.querySelector("select.o_accurate_subzone");
     if (!zoneSel || !subSel) {
@@ -54,12 +52,10 @@ document.addEventListener("change", async (ev) => {
         if (!current || current.hidden) {
             subSel.value = "";
         }
-        console.log("[AL] filtered sub-zones for zone", zoneId);
     } else if (ev.target.classList.contains("o_accurate_subzone")) {
         if (!subSel.value) {
             return;
         }
-        console.log("[AL] saving recipient + repricing…");
         await rpc("/accurate/website/set_recipient", {
             zone_id: zoneSel ? zoneSel.value : false,
             subzone_id: subSel.value,

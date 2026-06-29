@@ -21,8 +21,10 @@ The core accurate_logistics module stays backend-only; install this bridge only 
 sites that sell online.
 """,
     'author': '',
-    'depends': ['accurate_logistics_v18', 'website_sale', 'delivery'],
+    'depends': ['accurate_logistics_v18', 'website_sale', 'delivery', 'payment_custom'],
     'data': [
+        'data/payment_method_data.xml',
+        'data/payment_provider_data.xml',
         'views/delivery_carrier_views.xml',
         'views/checkout_templates.xml',
     ],

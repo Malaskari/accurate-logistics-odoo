@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+
+    <!-- "Cash on Delivery" payment provider — an offline (custom) provider, so
+         placing the order confirms it (transaction stays 'pending') and the
+         Accurate shipment is created with the courier collecting the full
+         amount on delivery. Ships DISABLED + unpublished; the admin enables and
+         publishes it, then sets a payment journal. -->
+    <record id="payment_provider_cod" model="payment.provider">
+        <field name="name">Cash on Delivery</field>
+        <field name="code">custom</field>
+        <field name="custom_mode">cash_on_delivery</field>
+        <field name="state">disabled</field>
+        <field name="is_published" eval="False"/>
+        <field name="company_id" ref="base.main_company"/>
+        <field name="redirect_form_view_id" ref="payment_custom.redirect_form"/>
+        <field name="pending_msg">Your order is confirmed. Please pay the total amount in cash to the courier when your package is delivered.</field>
+        <field name="payment_method_ids"
+               eval="[Command.set([ref('accurate_logistics_website.payment_method_cash_on_delivery')])]"/>
+    </record>
+
+</odoo>

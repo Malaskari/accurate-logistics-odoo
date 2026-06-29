@@ -318,6 +318,28 @@ class SaleOrder(models.Model):
 
     # ── Helper used by both auto-confirm and the manual picking button ────────
 
+    def _accurate_collect_amount(self):
+        """Amount the courier should COLLECT on delivery (COD).
+
+        Full order total, unless an invoice is already (partly) paid:
+          - No invoice / unpaid  → full amount (collect full COD).
+          - Invoice fully paid   → 0 (collect nothing).
+          - Invoice partially paid → residual (collect only what's owed).
+        Bridge modules (e.g. website checkout) override this to also return 0
+        for orders that were prepaid online.
+        """
+        self.ensure_one()
+        amount = self.amount_total
+        invoice = self.invoice_ids.filtered(
+            lambda i: i.state == 'posted' and i.move_type == 'out_invoice'
+        )[:1]
+        if invoice:
+            if invoice.payment_state in ('paid', 'in_payment', 'reversed'):
+                return 0.0
+            if invoice.payment_state == 'partial':
+                return invoice.amount_residual or amount
+        return amount
+
     def _create_accurate_shipment(self, send_to_api=True):
         """Build an `accurate.shipment` from this SO and link it to the
         dispatch picking if one exists. Returns the created shipment.
@@ -345,26 +367,12 @@ class SaleOrder(models.Model):
             lambda p: p._accurate_is_first_in_delivery_chain()
         )[:1]
 
-        # Decide collection rule based on invoice state:
-        # This tenant only offers ONE payment type: COLC (واجبة التحصيل / COD).
-        # There is NO "prepaid / already-paid" payment type, so the only way
-        # to make the courier collect NOTHING on a prepaid order is to send
-        # the COD amount (`price`) as 0. `price` here = the amount the courier
-        # collects on delivery:
-        #   - No invoice / unpaid → price = full amount (collect full COD).
-        #   - Invoice fully paid (e.g. EzonePay prepaid) → price = 0 (collect nothing).
-        #   - Invoice partially paid → price = residual (collect only what's owed).
-        price = self.amount_total
+        # Amount the courier should COLLECT on delivery (COD). The tenant only
+        # offers ONE payment type — COLC — so "prepaid" is expressed by sending
+        # the collect amount as 0. See _accurate_collect_amount (overridable by
+        # bridges, e.g. the website module sets 0 for orders prepaid online).
+        price = self._accurate_collect_amount()
         payment_type_code = 'COLC'
-        invoice = self.invoice_ids.filtered(
-            lambda i: i.state == 'posted' and i.move_type == 'out_invoice'
-        )[:1]
-        if invoice:
-            payment_state = invoice.payment_state
-            if payment_state in ('paid', 'in_payment', 'reversed'):
-                price = 0.0
-            elif payment_state == 'partial':
-                price = invoice.amount_residual or self.amount_total
 
         shipment_vals = {
             'sale_id': self.id,

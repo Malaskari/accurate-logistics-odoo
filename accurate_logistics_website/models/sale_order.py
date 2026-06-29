@@ -22,6 +22,20 @@ class SaleOrder(models.Model):
                 order.write(vals)
         return res
 
+    def _accurate_collect_amount(self):
+        """Courier collects nothing when the web order was already PAID ONLINE
+        (a confirmed transaction from a real online provider). Cash-on-Delivery
+        and offline ('custom') transactions stay 'pending' until delivery, so
+        the courier still collects the full amount (handled by super)."""
+        self.ensure_one()
+        paid_online = self.transaction_ids.filtered(
+            lambda t: t.state in ('done', 'authorized')
+            and t.provider_id.code not in ('custom', 'none')
+        )
+        if paid_online:
+            return 0.0
+        return super()._accurate_collect_amount()
+
     def _accurate_set_recipient(self, zone_id, subzone_id):
         """Validate + store the recipient Zone / Sub-zone chosen at checkout.
         Returns True once a valid sub-zone has been stored."""
