@@ -41,6 +41,9 @@
                options="{'no_create': True}"
                readonly="not accurate_recipient_zone_id or accurate_shipment_count > 0"
                placeholder="Choose a Zone first"/>
+        <field name="accurate_delivery_fee"
+               readonly="1"
+               invisible="not accurate_delivery_fee"/>
         <field name="accurate_shipment_code"
                widget="badge"
                decoration-danger="accurate_shipment_code"
@@ -82,6 +85,7 @@
                      options="{'no_create': True}"
                      readonly="not accurate_recipient_zone_id"
                      placeholder="Choose a Zone first to see its sub-zones"/>
+              <field name="accurate_delivery_fee" readonly="1"/>
             </group>
           </group>
           <group string="Classification">

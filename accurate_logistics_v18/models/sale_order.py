@@ -41,6 +41,16 @@ class SaleOrder(models.Model):
              'If empty, the Delivery Company\'s default service will be used '
              'when the shipment is created.',
     )
+    accurate_delivery_fee = fields.Monetary(
+        string='Delivery Fees',
+        currency_field='currency_id',
+        readonly=True,
+        copy=False,
+        tracking=True,
+        help='Courier delivery fee for the chosen zone / sub-zone. Fetched '
+             'automatically from Accurate Logistics once the Delivery Company, '
+             'Service, Recipient Zone and Sub-zone are all set.',
+    )
 
     @api.onchange('accurate_delivery_company_id')
     def _onchange_accurate_delivery_company_id(self):
@@ -60,6 +70,65 @@ class SaleOrder(models.Model):
             # Auto-fill default service if company has one
             if company and company.default_service_id and not order.accurate_service_id:
                 order.accurate_service_id = company.default_service_id
+
+    # ── Auto-fetch the delivery fee when the zone / sub-zone are chosen ────────
+
+    @api.onchange(
+        'accurate_recipient_subzone_id',
+        'accurate_recipient_zone_id',
+        'accurate_service_id',
+        'accurate_payment_type_code',
+        'accurate_price_type_code',
+    )
+    def _onchange_accurate_delivery_fee(self):
+        """Pull the courier delivery fee from the API as soon as the recipient
+        sub-zone (and a service) are set, so the salesperson sees the cost right
+        on the quotation. Never blocks the form — falls back to 0 on any issue."""
+        for order in self:
+            order.accurate_delivery_fee = order._accurate_fetch_delivery_fee()
+
+    def _accurate_order_weight(self):
+        """Best-effort total weight of the order lines (kg). Falls back to 1.0
+        so the fee API always gets a positive weight."""
+        self.ensure_one()
+        weight = 0.0
+        for line in self.order_line:
+            if line.product_id:
+                weight += (line.product_id.weight or 0.0) * (line.product_uom_qty or 0.0)
+        return weight or 1.0
+
+    def _accurate_fetch_delivery_fee(self):
+        """Call Accurate's calculateShipmentFees for this order's
+        company / service / zone / sub-zone and return the delivery fee.
+        Returns 0.0 (never raises) if anything is missing, not yet synced
+        (no api_id), or the API is unreachable."""
+        self.ensure_one()
+        company = self.accurate_delivery_company_id
+        zone = self.accurate_recipient_zone_id
+        subzone = self.accurate_recipient_subzone_id
+        service = self.accurate_service_id or (company.default_service_id if company else False)
+        if not (company and zone and subzone and service):
+            return 0.0
+        if not (zone.api_id and subzone.api_id and service.api_id):
+            return 0.0
+        fee_input = {
+            'price': self.amount_total or 0.0,
+            'weight': self._accurate_order_weight(),
+            'serviceId': service.api_id,
+            'recipientZoneId': zone.api_id,
+            'recipientSubzoneId': subzone.api_id,
+            'paymentTypeCode': self.accurate_payment_type_code or 'COLC',
+            'priceTypeCode': self.accurate_price_type_code or 'EXCLD',
+        }
+        try:
+            fees = company._al_calculate_fees(fee_input)
+        except Exception as exc:
+            _logger.warning(
+                'Accurate Logistics: delivery-fee calc failed for %s: %s',
+                self.name or 'new order', exc,
+            )
+            return 0.0
+        return fees.get('delivery') or 0.0
 
     # ── Shipment classification (passed to the API on dispatch) ────────────
     accurate_type_code = fields.Selection(
