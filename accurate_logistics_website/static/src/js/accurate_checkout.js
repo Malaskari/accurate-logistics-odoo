@@ -6,20 +6,42 @@ import { rpc } from "@web/core/network/rpc";
 /**
  * Accurate Logistics checkout zone picker.
  *
- * Bound to a stable checkout wrapper and using delegated events, so it works
- * even though the delivery-method block is injected dynamically by website_sale.
- *  - Zone change   → filter the Sub-zone options client-side (data-parent-id).
- *  - Sub-zone change → POST the choice to /accurate/website/set_recipient, then
- *    reload so the recomputed delivery fee + order totals are shown.
+ * The whole delivery-method row in website checkout is click-to-select (clicking
+ * it selects that carrier and re-renders the block). That hijacks clicks on our
+ * Zone / Sub-zone <select>s, so the dropdown closes before you can pick. We stop
+ * click + mousedown that originate inside `.o_accurate_zone_picker` in the
+ * CAPTURE phase (top-down), so they never reach the row handler — while leaving
+ * the <select>'s own default behaviour (opening + picking) intact.
  *
- * NOTE (Odoo 18): verify `.oe_website_sale` exists on the checkout page; if the
- * wrapper class differs, adjust the selector below.
+ *  - Zone change    → filter the Sub-zone options client-side (data-parent-id).
+ *  - Sub-zone change → POST the choice to /accurate/website/set_recipient, then
+ *    reload so the recomputed delivery fee + totals show.
  */
 publicWidget.registry.AccurateCheckoutZones = publicWidget.Widget.extend({
     selector: ".oe_website_sale",
     events: {
         "change select.o_accurate_zone": "_onZoneChange",
         "change select.o_accurate_subzone": "_onSubzoneChange",
+    },
+
+    start() {
+        this._captureStop = (ev) => {
+            const t = ev.target;
+            if (t && t.closest && t.closest(".o_accurate_zone_picker")) {
+                ev.stopPropagation();
+            }
+        };
+        document.addEventListener("click", this._captureStop, true);
+        document.addEventListener("mousedown", this._captureStop, true);
+        return this._super(...arguments);
+    },
+
+    destroy() {
+        if (this._captureStop) {
+            document.removeEventListener("click", this._captureStop, true);
+            document.removeEventListener("mousedown", this._captureStop, true);
+        }
+        return this._super(...arguments);
     },
 
     _picker(target) {
@@ -65,8 +87,6 @@ publicWidget.registry.AccurateCheckoutZones = publicWidget.Widget.extend({
             zone_id: zoneSel ? zoneSel.value : false,
             subzone_id: subSel.value,
         });
-        // Reload so website_sale re-renders the delivery price + cart summary
-        // with the freshly computed fee.
         window.location.reload();
     },
 });
