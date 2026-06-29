@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+  <!-- Add cascading Zone / Sub-zone dropdowns under the "Accurate Logistics"
+       delivery method in the website checkout. Rendered only for carriers whose
+       provider is Accurate. Zones are read with sudo() so public visitors can see
+       them without broadening ACLs. Sub-zones carry data-parent-id so the small
+       frontend widget (accurate_checkout.js) can filter them client-side and
+       POST the choice to /accurate/website/set_recipient.
+
+       NOTE (Odoo 18 vs 19): this inherits website_sale.delivery_method (carrier
+       var = `dm`, `order` in scope). Verify the template id / structure on the
+       live Odoo 18 site; adjust the xpath anchor if the markup differs. -->
+  <template id="delivery_method_accurate_zones"
+            inherit_id="website_sale.delivery_method"
+            name="Accurate Logistics zone picker">
+    <xpath expr="//label[@name='o_delivery_method_label']/../.." position="after">
+      <t t-if="dm.delivery_type == 'accurate'">
+        <t t-set="al_company" t-value="dm.sudo().accurate_delivery_company_id"/>
+        <t t-set="al_zones" t-value="al_company.zone_ids"/>
+        <t t-set="cur_zone" t-value="order.sudo().accurate_recipient_zone_id"/>
+        <t t-set="cur_sub" t-value="order.sudo().accurate_recipient_subzone_id"/>
+        <div class="o_accurate_zone_picker mt-2">
+          <div class="row g-2">
+            <div class="col-sm-6">
+              <label class="form-label small mb-1" t-attf-for="o_accurate_zone_{{dm.id}}">
+                Delivery Zone
+              </label>
+              <select t-attf-id="o_accurate_zone_{{dm.id}}"
+                      class="form-select form-select-sm o_accurate_zone">
+                <option value="">— choose zone —</option>
+                <t t-foreach="al_zones" t-as="z">
+                  <option t-att-value="z.id"
+                          t-att-selected="z == cur_zone and 'selected' or None"
+                          t-out="z.name"/>
+                </t>
+              </select>
+            </div>
+            <div class="col-sm-6">
+              <label class="form-label small mb-1" t-attf-for="o_accurate_subzone_{{dm.id}}">
+                Sub-zone
+              </label>
+              <select t-attf-id="o_accurate_subzone_{{dm.id}}"
+                      class="form-select form-select-sm o_accurate_subzone">
+                <option value="">— choose sub-zone —</option>
+                <t t-foreach="al_zones" t-as="z">
+                  <t t-foreach="z.child_ids" t-as="s">
+                    <option t-if="s.is_subzone and s.in_price_list"
+                            t-att-value="s.id"
+                            t-att-data-parent-id="z.id"
+                            t-att-hidden="z != cur_zone and 'hidden' or None"
+                            t-att-selected="s == cur_sub and 'selected' or None"
+                            t-out="s.name"/>
+                  </t>
+                </t>
+              </select>
+            </div>
+          </div>
+          <small class="text-muted">Pick your zone to calculate the delivery fee.</small>
+        </div>
+      </t>
+    </xpath>
+  </template>
+
+</odoo>
