@@ -32,6 +32,6 @@ sites that sell online.
         ],
     },
     'installable': True,
-    'application': False,
+    'application': True,
     'license': 'LGPL-3',
 }
