@@ -63,6 +63,14 @@ class AccurateWebsiteSale(WebsiteSale):
     # (the rest are hidden by CSS) and default the country to the shop's country
     # so taxes / payment availability still work.
 
+    def shop_address_submit(self, **kw):
+        """The simplified address form hides street/city/country, but the page
+        still posts them in `required_fields`, which would re-require them and
+        reject the submission (HTTP 400). Drop that list so only name + phone
+        are required (see _get_mandatory_* below)."""
+        kw['required_fields'] = ''
+        return super().shop_address_submit(**kw)
+
     def _get_mandatory_delivery_address_fields(self, country_sudo):
         return {'name', 'phone'}
 
