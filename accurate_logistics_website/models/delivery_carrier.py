@@ -1,6 +1,6 @@
 import logging
 
-from odoo import fields, models
+from odoo import api, fields, models
 
 _logger = logging.getLogger(__name__)
 
@@ -18,6 +18,14 @@ class DeliveryCarrier(models.Model):
         help='The fixed Accurate Logistics company used to quote and dispatch web '
              'orders placed with this delivery method.',
     )
+
+    @api.onchange('delivery_type')
+    def _onchange_delivery_type_accurate(self):
+        """Accurate quotes a price up-front, so charge the estimated fee at
+        checkout (not 'Real cost', which would only bill after delivery and show
+        'Computed after delivery' with no fee on the order)."""
+        if self.delivery_type == 'accurate':
+            self.invoice_policy = 'estimated'
 
     # ── Rate (the only hook the website really needs) ─────────────────────────
 
