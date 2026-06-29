@@ -47,6 +47,16 @@ class AccurateWebsiteSale(WebsiteSale):
             'carrier_id': order_sudo.carrier_id.id,
         }
 
+    def _get_shop_payment_values(self, order, **kwargs):
+        """Label the main button "Confirm Order" instead of "Pay now" when the
+        only available payment options are offline (Cash on Delivery / Wire
+        Transfer) — nothing is charged online, the order is just confirmed."""
+        values = super()._get_shop_payment_values(order, **kwargs)
+        providers = values.get('providers_sudo')
+        if providers and all(p.code in ('custom', 'none') for p in providers):
+            values['submit_button_label'] = _('Confirm Order')
+        return values
+
     def _get_shop_payment_errors(self, order):
         """Block the payment step if the Accurate delivery method is selected but
         the customer hasn't picked a Zone + Sub-zone yet — otherwise the backend

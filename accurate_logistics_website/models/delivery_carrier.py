@@ -61,11 +61,14 @@ class DeliveryCarrier(models.Model):
         }
 
     def _accurate_quote_fee(self, order, company, zone, subzone):
-        """Build fee_input and call the Accurate fee API. Returns 0.0 on any
-        problem (mirrors sale_order._accurate_fetch_delivery_fee)."""
+        """Build fee_input and call the Accurate fee API. If the fee cannot be
+        quoted (zones not synced, or the courier API is unreachable), fall back
+        to this carrier's Fixed Price so checkout still charges a sensible
+        delivery fee instead of 0."""
+        fallback = self.fixed_price or 0.0
         service = order.accurate_service_id or company.default_service_id
         if not (service and zone.api_id and subzone.api_id and service.api_id):
-            return 0.0
+            return fallback
         # Declared value = goods total only (exclude any delivery line so the
         # fee calc never feeds on itself).
         goods = sum(
@@ -87,9 +90,11 @@ class DeliveryCarrier(models.Model):
         try:
             fees = company._al_calculate_fees(fee_input)
         except Exception as exc:
-            _logger.warning('Accurate web: fee calc failed for %s: %s',
-                            order.name or 'cart', exc)
-            return 0.0
+            _logger.warning(
+                'Accurate web: fee API unreachable for %s — using fallback %.2f: %s',
+                order.name or 'cart', fallback, exc,
+            )
+            return fallback
         return fees.get('delivery') or 0.0
 
     # ── Ship / cancel / tracking stubs ────────────────────────────────────────
