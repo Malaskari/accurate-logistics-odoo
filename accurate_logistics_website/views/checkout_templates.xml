@@ -8,13 +8,14 @@
        frontend widget (accurate_checkout.js) can filter them client-side and
        POST the choice to /accurate/website/set_recipient.
 
-       NOTE (Odoo 18 vs 19): this inherits website_sale.delivery_method (carrier
-       var = `dm`, `order` in scope). Verify the template id / structure on the
-       live Odoo 18 site; adjust the xpath anchor if the markup differs. -->
+       Verified against Odoo 18 website_sale.delivery_method: carrier var = `dm`,
+       `order` in scope, the price badge is <span name="price"> inside a `col`
+       inside the carrier row <div class="row flex-column flex-md-row …">. We
+       anchor on that row (price span → col → row) and insert the picker after it. -->
   <template id="delivery_method_accurate_zones"
             inherit_id="website_sale.delivery_method"
             name="Accurate Logistics zone picker">
-    <xpath expr="//label[@name='o_delivery_method_label']/../.." position="after">
+    <xpath expr="//span[@name='price']/../.." position="after">
       <t t-if="dm.delivery_type == 'accurate'">
         <t t-set="al_company" t-value="dm.sudo().accurate_delivery_company_id"/>
         <t t-set="al_zones" t-value="al_company.zone_ids"/>

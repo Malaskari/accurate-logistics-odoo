@@ -29,15 +29,20 @@ pay the courier delivery fee at checkout. The shipment is still auto-created by
 - The payment step is blocked until a Zone + Sub-zone are chosen
   (`controllers/main.py: _get_shop_payment_errors`).
 
-## ⚠️ Must verify on a LOCAL Odoo 18 (built/tested against Odoo 19 source)
-The checkout markup/JS differs between Odoo versions. Verify on a dev Odoo 18:
-1. `website_sale.delivery_method` template id + structure — the xpath anchor
-   `//label[@name='o_delivery_method_label']/../..` and the `dm` / `order` vars.
-2. The frontend wrapper selector `.oe_website_sale` in `accurate_checkout.js`
-   (delegated events rely on it existing at page load).
-3. `WebsiteSale._get_shop_payment_errors(order)` exists in this version.
-4. End-to-end: add product → checkout → Accurate method → Zone → Sub-zone →
-   fee appears as a charged line → pay → order confirms → shipment auto-created →
-   delivery slip shows the same fee. Negative: blocked at payment with no sub-zone.
+## Verified against Odoo 18 source (odoo/odoo @ 18.0)
+- `website_sale.delivery_method` template exists; carrier var = `dm`, `order` in
+  scope; price badge = `<span name="price">` inside a `col` inside the carrier row
+  `<div class="row flex-column flex-md-row …">`. The xpath anchor is
+  `//span[@name='price']/../..` (price span → col → row), insert after. ✓
+- `WebsiteSale._get_shop_payment_errors(self, order)` exists and returns
+  `(title, message)` tuples → the payment-step block works. ✓
+- delivery_form is `<form id="o_delivery_form" class="o_delivery_form mb-4">`. ✓
 
-Do NOT test on production. Use a local/staging Odoo 18.
+## Still to confirm at runtime (not install-blocking)
+- The frontend widget binds to `.oe_website_sale` (delegated events). Confirm that
+  wrapper class is present on the checkout page; if not, switch the selector in
+  `accurate_checkout.js` to `#wrap`.
+- End-to-end smoke test: add product → checkout → Accurate method → Zone →
+  Sub-zone → fee appears as a charged line → pay → order confirms → shipment
+  auto-created → delivery slip shows the same fee. Negative: blocked at payment
+  with no sub-zone chosen.
