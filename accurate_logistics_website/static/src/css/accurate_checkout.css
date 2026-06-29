@@ -1,0 +1,16 @@
+/* Accurate Logistics checkout: the delivery destination is the Zone / Sub-zone,
+   so the street / city / zip / country / email fields on the address form are
+   unnecessary. Show only Full name + Phone. (Required fields are reduced to
+   name + phone server-side; the country defaults to the shop's country.) */
+.o_wsale_address_fill #div_email_public,
+.o_wsale_address_fill #div_street,
+.o_wsale_address_fill #div_street2,
+.o_wsale_address_fill #div_zip,
+.o_wsale_address_fill #div_city,
+.o_wsale_address_fill #div_country,
+.o_wsale_address_fill #div_state,
+.o_wsale_address_fill #company_name_div,
+.o_wsale_address_fill #div_vat,
+.o_wsale_address_fill div:has(> input[name="email"]) {
+    display: none !important;
+}

@@ -31,6 +31,7 @@ sites that sell online.
     'assets': {
         'web.assets_frontend': [
             'accurate_logistics_website/static/src/js/accurate_checkout.js',
+            'accurate_logistics_website/static/src/css/accurate_checkout.css',
         ],
     },
     'installable': True,

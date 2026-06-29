@@ -57,6 +57,29 @@ class AccurateWebsiteSale(WebsiteSale):
             values['submit_button_label'] = _('Confirm Order')
         return values
 
+    # ── Simplified checkout address: only Name + Phone ────────────────────────
+    # The delivery destination is the Accurate Zone / Sub-zone, so the street /
+    # city / zip / country fields are unnecessary. We require only name + phone
+    # (the rest are hidden by CSS) and default the country to the shop's country
+    # so taxes / payment availability still work.
+
+    def _get_mandatory_delivery_address_fields(self, country_sudo):
+        return {'name', 'phone'}
+
+    def _get_mandatory_billing_address_fields(self, country_sudo):
+        return {'name', 'phone'}
+
+    def _parse_form_data(self, form_data):
+        address_values, extra_form_data = super()._parse_form_data(form_data)
+        if not address_values.get('country_id'):
+            country = (
+                request.website.company_id.country_id
+                or request.env.company.country_id
+            )
+            if country:
+                address_values['country_id'] = country.id
+        return address_values, extra_form_data
+
     def _get_shop_payment_errors(self, order):
         """Block the payment step if the Accurate delivery method is selected but
         the customer hasn't picked a Zone + Sub-zone yet — otherwise the backend
