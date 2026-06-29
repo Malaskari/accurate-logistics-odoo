@@ -86,6 +86,10 @@ class AccurateWebsiteSale(WebsiteSale):
             )
             if country:
                 address_values['country_id'] = country.id
+        # The sale_phone_lookup module requires a mobile on every partner, but
+        # the simplified checkout only captures a phone — mirror it into mobile.
+        if address_values.get('phone') and not address_values.get('mobile'):
+            address_values['mobile'] = address_values['phone']
         return address_values, extra_form_data
 
     def _get_shop_payment_errors(self, order):
