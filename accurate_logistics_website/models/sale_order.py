@@ -23,10 +23,22 @@ class SaleOrder(models.Model):
         return res
 
     def _accurate_collect_amount(self):
-        """Courier collects nothing when the web order was already PAID ONLINE
-        (a confirmed transaction from a real online provider). Cash-on-Delivery
-        and offline ('custom') transactions stay 'pending' until delivery, so
-        the courier still collects the full amount (handled by super)."""
+        """Amount the courier collects and remits to us (the COD price sent to
+        Accurate).
+
+        Two web-specific adjustments on top of the core amount:
+
+        1. PAID ONLINE → 0. A confirmed transaction from a real online provider
+           means the order is already prepaid, so the courier collects nothing.
+
+        2. STRIP THE DELIVERY FEE. On the website the courier fee is added to the
+           cart as a real delivery line, so amount_total = goods + delivery. But
+           the shipment is sent with price_type EXCLD ("shipping fee EXCLUDED
+           from price"): Accurate adds its own delivery fee on top of the price
+           we send. So the COD price must be GOODS ONLY — otherwise the fee is
+           charged twice. The courier then collects goods + fee from the
+           customer, keeps the fee, and remits the goods amount to us.
+        """
         self.ensure_one()
         paid_online = self.transaction_ids.filtered(
             lambda t: t.state in ('done', 'authorized')
@@ -34,7 +46,11 @@ class SaleOrder(models.Model):
         )
         if paid_online:
             return 0.0
-        return super()._accurate_collect_amount()
+        amount = super()._accurate_collect_amount()
+        delivery_total = sum(
+            self.order_line.filtered(lambda l: l.is_delivery).mapped('price_total')
+        )
+        return max(amount - delivery_total, 0.0)
 
     def _accurate_set_recipient(self, zone_id, subzone_id):
         """Validate + store the recipient Zone / Sub-zone chosen at checkout.
