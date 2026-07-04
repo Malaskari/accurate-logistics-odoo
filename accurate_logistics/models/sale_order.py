@@ -1,6 +1,7 @@
 import logging
 
 from odoo import api, fields, models
+from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
 
@@ -295,26 +296,109 @@ class SaleOrder(models.Model):
 
             # 2. Auto-create the Accurate shipment as soon as the SO is
             #    confirmed — provided the delivery company + recipient zone
-            #    + sub-zone are all set. We don't auto-send if any of those
-            #    are missing; the salesperson can still click "Send to
-            #    Accurate Logistics" later from the picking once they fill
-            #    them in.
+            #    + sub-zone are all set.
             if (
                 order.accurate_delivery_company_id
                 and order.accurate_recipient_zone_id
                 and order.accurate_recipient_subzone_id
                 and not order.accurate_shipment_ids
             ):
+                # MANUAL (back-office) orders confirm TRANSACTIONALLY: the order
+                # must not become a live Sale Order unless the shipment is
+                # actually created & accepted by Accurate. If the API errors (or
+                # returns no shipment) we abort — the confirmation rolls back to
+                # a quotation and the error is logged as an activity on the order
+                # so staff can fix it and press Confirm again.
+                #
+                # Website orders keep the lenient behaviour (confirm anyway, the
+                # shipment can be retried): the customer already checked out, so
+                # we don't block a placed order on a transient courier outage.
+                # A caller can also force-skip the gate with the
+                # `accurate_skip_shipment_gate` context key.
+                gate = (
+                    not self.env.context.get('accurate_skip_shipment_gate')
+                    and not ('website_id' in order._fields and order.website_id)
+                )
+                # Create the record first (no send), then send explicitly so we
+                # can read the real API error — _send_to_api re-raises it but
+                # _create_accurate_shipment(send_to_api=True) would swallow it.
+                shipment = order._create_accurate_shipment(send_to_api=False)
                 try:
-                    order._create_accurate_shipment(send_to_api=True)
+                    shipment.action_send_to_api()
                 except Exception as exc:
+                    error = shipment.error_message or str(exc) or 'Unknown error'
+                    if gate:
+                        # Persist the error where it survives the rollback, then
+                        # abort the confirmation (order stays a quotation).
+                        order._accurate_log_confirm_failure(error)
+                        raise UserError(
+                            'Cannot confirm %(name)s — the Accurate Logistics '
+                            'shipment could not be created, so the order was NOT '
+                            'confirmed. Fix the problem below and press Confirm '
+                            'again.\n\n%(err)s\n\n'
+                            'تعذّر تأكيد الطلب %(name)s — لم يتم إنشاء شحنة '
+                            'أكيوريت، لذلك لم يتم تأكيد الطلب. عالج المشكلة ثم '
+                            'اضغط "تأكيد" مرة أخرى.\n\n%(err)s'
+                            % {'name': order.name, 'err': error}
+                        )
+                    # Lenient path (website / skipped gate): keep the order
+                    # confirmed; the shipment stays in 'error' state to retry.
                     _logger.warning(
-                        'Accurate Logistics: auto-create on SO confirm failed for %s: %s',
-                        order.name, exc,
+                        'Accurate Logistics: shipment send failed for %s '
+                        '(order confirmed anyway): %s', order.name, exc,
                     )
-                    # Don't break SO confirmation if Accurate is unreachable.
-                    # The user can retry from the picking form.
         return res
+
+    def _accurate_log_confirm_failure(self, error):
+        """Persist a shipment-creation failure on the order so it survives the
+        rollback of the aborted confirmation.
+
+        _action_confirm raises to roll the confirmation back (keeping the order a
+        quotation) when the Accurate shipment can't be created — but that
+        rollback also undoes anything written on the current cursor. So we log
+        the failure through a SEPARATE cursor that commits on its own: the
+        activity then stays on the order for staff to see and act on.
+        """
+        self.ensure_one()
+        summary = 'Accurate shipment failed — order not confirmed'
+        note = (
+            '<p>The Accurate Logistics shipment could not be created, so this '
+            'order was <b>not confirmed</b>. Fix the issue below, then press '
+            '<b>Confirm</b> again.</p>'
+            '<p>تعذّر إنشاء شحنة أكيوريت، لذلك <b>لم يتم تأكيد</b> هذا الطلب. '
+            'عالج المشكلة أدناه ثم اضغط <b>تأكيد</b> مرة أخرى.</p>'
+            '<pre style="white-space:pre-wrap;margin:0">%s</pre>'
+        ) % (error or '')
+        try:
+            with self.env.registry.cursor() as new_cr:
+                new_env = api.Environment(new_cr, self.env.uid, self.env.context)
+                order = new_env['sale.order'].browse(self.id)
+                if not order.exists():
+                    return
+                activity_type = new_env.ref(
+                    'mail.mail_activity_data_warning', raise_if_not_found=False,
+                ) or new_env.ref(
+                    'mail.mail_activity_data_todo', raise_if_not_found=False,
+                )
+                # Direct create (mirrors the module's other activity logging) —
+                # an INSERT that never UPDATEs the sale_order row, so it cannot
+                # deadlock against the confirmation cursor's lock on that row.
+                new_env['mail.activity'].create({
+                    'res_model_id': new_env['ir.model']._get_id('sale.order'),
+                    'res_model': 'sale.order',
+                    'res_id': order.id,
+                    'activity_type_id': activity_type.id if activity_type else False,
+                    'summary': summary,
+                    'note': note,
+                    'user_id': order.user_id.id or new_env.uid,
+                    'date_deadline': fields.Date.today(),
+                })
+                new_cr.commit()
+        except Exception as exc:
+            _logger.warning(
+                'Accurate Logistics: could not persist confirm-failure log for '
+                '%s: %s', self.name, exc,
+            )
 
     # ── Helper used by both auto-confirm and the manual picking button ────────
 
