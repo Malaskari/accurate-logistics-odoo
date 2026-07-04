@@ -9,6 +9,7 @@
     <field name="arch" type="xml">
       <xpath expr="//field[@name='origin']" position="after">
         <field name="accurate_shipment_code" string="Shipment" optional="show"/>
+        <field name="accurate_status" string="Delivery Status" optional="show"/>
         <field name="accurate_salesperson_id" string="Salesperson" optional="show"/>
       </xpath>
     </field>
