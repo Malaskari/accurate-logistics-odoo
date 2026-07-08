@@ -140,6 +140,26 @@ class StockPicking(models.Model):
                 return line.price_unit
         return product.lst_price or 0.0
 
+    def _accurate_line_total(self, product, quantity):
+        """Line total for the Delivery Slip = quantity × unit price."""
+        self.ensure_one()
+        return (quantity or 0.0) * self._accurate_unit_price(product)
+
+    def _accurate_slip_totals(self):
+        """Footer totals for the Delivery Slip, as a dict:
+          - units  : total delivered quantity across all product moves
+          - amount : Σ (delivered qty × unit price)
+        Summed from the moves so it matches whether the slip is printed before
+        or after the transfer is done."""
+        self.ensure_one()
+        units = 0.0
+        amount = 0.0
+        for move in self.move_ids.filtered(lambda m: m.product_uom_qty):
+            qty = move.quantity
+            units += qty
+            amount += qty * self._accurate_unit_price(move.product_id)
+        return {'units': units, 'amount': amount}
+
     @api.depends(
         'accurate_shipment_id',
         'accurate_shipment_id.code',

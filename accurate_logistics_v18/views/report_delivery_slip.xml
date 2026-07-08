@@ -67,28 +67,72 @@
       </table>
     </xpath>
 
-    <!-- Unit Price column on the product table shown while the picking is NOT
-         done (state != 'done'): header + per-move cell. Price comes from the
-         Sale Order line for that product (robust across multi-step warehouses
-         where the move may not carry a sale_line_id). -->
+    <!-- Unit Price + Total columns on the product table shown while the picking
+         is NOT done (state != 'done'): header + per-move cells. Price comes from
+         the Sale Order line for that product (robust across multi-step
+         warehouses where the move may not carry a sale_line_id). -->
     <xpath expr="//th[@name='th_sm_quantity']" position="after">
       <th name="th_sm_price" class="text-end"><strong>Unit Price</strong></th>
+      <th name="th_sm_total" class="text-end"><strong>Total</strong></th>
     </xpath>
     <xpath expr="//table[@name='stock_move_table']/tbody/tr/td[3]" position="after">
       <td class="text-end">
         <span t-out="o._accurate_unit_price(move.product_id)"
               t-options="{'widget': 'monetary', 'display_currency': o.sale_id.currency_id or o.company_id.currency_id}"/>
       </td>
+      <td class="text-end">
+        <span t-out="o._accurate_line_total(move.product_id, move.quantity)"
+              t-options="{'widget': 'monetary', 'display_currency': o.sale_id.currency_id or o.company_id.currency_id}"/>
+      </td>
+    </xpath>
+    <!-- Totals footer for the not-done table. -->
+    <xpath expr="//table[@name='stock_move_table']" position="inside">
+      <tfoot>
+        <t t-set="al_tot" t-value="o._accurate_slip_totals()"/>
+        <tr class="fw-bold" style="border-top:2px solid #333;">
+          <td><strong>Total</strong></td>
+          <td/>
+          <td class="text-end">
+            <strong><span t-out="al_tot['units']"
+                    t-options="{'widget': 'float', 'decimal_precision': 'Product Unit of Measure'}"/> Units</strong>
+          </td>
+          <td/>
+          <td class="text-end">
+            <strong><span t-out="al_tot['amount']"
+                    t-options="{'widget': 'monetary', 'display_currency': o.sale_id.currency_id or o.company_id.currency_id}"/></strong>
+          </td>
+        </tr>
+      </tfoot>
     </xpath>
 
-    <!-- Unit Price header on the product table shown once the picking is DONE
-         (the rows themselves are rendered by the shared sub-templates below). -->
+    <!-- Unit Price + Total headers on the product table shown once the picking
+         is DONE (the rows themselves come from the shared sub-templates below). -->
     <xpath expr="//th[@name='th_sml_quantity']" position="after">
       <th name="th_sml_price" class="text-end"><strong>Unit Price</strong></th>
+      <th name="th_sml_total" class="text-end"><strong>Total</strong></th>
+    </xpath>
+    <!-- Totals footer for the done table. -->
+    <xpath expr="//table[@name='stock_move_line_table']" position="inside">
+      <tfoot>
+        <t t-set="al_tot" t-value="o._accurate_slip_totals()"/>
+        <tr class="fw-bold" style="border-top:2px solid #333;">
+          <td><strong>Total</strong></td>
+          <td/>
+          <td class="text-center">
+            <strong><span t-out="al_tot['units']"
+                    t-options="{'widget': 'float', 'decimal_precision': 'Product Unit of Measure'}"/> Units</strong>
+          </td>
+          <td/>
+          <td class="text-end">
+            <strong><span t-out="al_tot['amount']"
+                    t-options="{'widget': 'monetary', 'display_currency': o.sale_id.currency_id or o.company_id.currency_id}"/></strong>
+          </td>
+        </tr>
+      </tfoot>
     </xpath>
   </template>
 
-  <!-- Unit Price cell for the aggregated (done, no serial numbers) rows. -->
+  <!-- Unit Price + Total cells for the aggregated (done, no serial) rows. -->
   <template id="report_delivery_aggregated_unit_price"
             inherit_id="stock.stock_report_delivery_aggregated_move_lines">
     <xpath expr="//td[@name='move_line_aggregated_quantity']" position="after">
@@ -96,15 +140,23 @@
         <span t-out="o._accurate_unit_price(aggregated_lines[line]['product'])"
               t-options="{'widget': 'monetary', 'display_currency': o.sale_id.currency_id or o.company_id.currency_id}"/>
       </td>
+      <td class="text-end" t-if="o._name == 'stock.picking'">
+        <span t-out="o._accurate_line_total(aggregated_lines[line]['product'], aggregated_lines[line]['quantity'])"
+              t-options="{'widget': 'monetary', 'display_currency': o.sale_id.currency_id or o.company_id.currency_id}"/>
+      </td>
     </xpath>
   </template>
 
-  <!-- Unit Price cell for the per-serial/lot rows. -->
+  <!-- Unit Price + Total cells for the per-serial/lot rows. -->
   <template id="report_delivery_serial_unit_price"
             inherit_id="stock.stock_report_delivery_has_serial_move_line">
     <xpath expr="//td[@name='move_line_lot_quantity']" position="after">
       <td class="text-end" t-if="o._name == 'stock.picking'">
         <span t-out="o._accurate_unit_price(move_line.product_id)"
+              t-options="{'widget': 'monetary', 'display_currency': o.sale_id.currency_id or o.company_id.currency_id}"/>
+      </td>
+      <td class="text-end" t-if="o._name == 'stock.picking'">
+        <span t-out="o._accurate_line_total(move_line.product_id, move_line.quantity)"
               t-options="{'widget': 'monetary', 'display_currency': o.sale_id.currency_id or o.company_id.currency_id}"/>
       </td>
     </xpath>
