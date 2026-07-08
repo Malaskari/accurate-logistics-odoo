@@ -24,40 +24,89 @@
     <!-- Extra fields as a full-width table BELOW the native info block, styled
          like the product table (it inherits the layout's table styling), so it
          reads as one organised table instead of cramped columns squeezed into
-         the info box. 4 columns = two label/value pairs per row. Zone/sub-zone
-         fall back to the linked shipment; phone uses the shipment's recipient
-         phone (Char in 18 AND 19) rather than partner.mobile (removed in 19). -->
+         the info box. Customer name + phone up top; zone/sub-zone fall back to
+         the linked shipment; phone uses the shipment's recipient phone (Char in
+         18 AND 19) rather than partner.mobile (removed in 19). -->
     <xpath expr="//div[@id='informations']" position="after">
       <t t-set="al_ship" t-value="o._accurate_resolve_shipment()"/>
       <t t-set="al_zone" t-value="o.accurate_recipient_zone_id or al_ship.recipient_zone_id"/>
       <t t-set="al_subzone" t-value="o.accurate_recipient_subzone_id or al_ship.recipient_subzone_id"/>
       <t t-set="al_phone" t-value="o.partner_id.phone or al_ship.recipient_phone or al_ship.recipient_mobile"/>
+      <t t-set="al_customer" t-value="(o.sale_id.partner_id.name if o.sale_id else False) or o.partner_id.name or al_ship.recipient_name"/>
       <t t-set="al_currency" t-value="o.sale_id.currency_id or o.company_id.currency_id"/>
       <table class="table table-sm mt-2 mb-4" name="accurate_extra_info"
-             t-if="o.accurate_salesperson_id or al_zone or al_subzone or al_phone or al_ship or o.sale_id">
+             t-if="o.accurate_salesperson_id or al_zone or al_subzone or al_phone or al_customer or al_ship or o.sale_id">
         <tbody>
           <tr>
-            <td class="py-2 pe-3 text-nowrap"><strong>Salesperson</strong></td>
-            <td class="py-2" t-out="o.accurate_salesperson_id.name"/>
+            <td class="py-2 pe-3 text-nowrap"><strong>Customer</strong></td>
+            <td class="py-2" t-out="al_customer"/>
             <td class="py-2 pe-3 text-nowrap"><strong>Phone</strong></td>
             <td class="py-2" t-out="al_phone"/>
           </tr>
           <tr>
-            <td class="py-2 pe-3 text-nowrap"><strong>Zone</strong></td>
-            <td class="py-2" t-out="al_zone.name"/>
+            <td class="py-2 pe-3 text-nowrap"><strong>Salesperson</strong></td>
+            <td class="py-2" t-out="o.accurate_salesperson_id.name"/>
             <td class="py-2 pe-3 text-nowrap"><strong>Delivery Fees</strong></td>
             <td class="py-2"><span t-out="al_ship.fee_delivery"
                  t-options="{'widget': 'monetary', 'display_currency': al_currency}"/></td>
           </tr>
           <tr>
-            <td class="py-2 pe-3 text-nowrap"><strong>Sub-zone</strong></td>
-            <td class="py-2" t-out="al_subzone.name"/>
+            <td class="py-2 pe-3 text-nowrap"><strong>Zone</strong></td>
+            <td class="py-2" t-out="al_zone.name"/>
             <td class="py-2 pe-3 text-nowrap"><strong>Order Total</strong></td>
             <td class="py-2"><span t-out="o.sale_id.amount_total"
                  t-options="{'widget': 'monetary', 'display_currency': o.sale_id.currency_id}"/></td>
           </tr>
+          <tr>
+            <td class="py-2 pe-3 text-nowrap"><strong>Sub-zone</strong></td>
+            <td class="py-2" t-out="al_subzone.name"/>
+            <td class="py-2"/>
+            <td class="py-2"/>
+          </tr>
         </tbody>
       </table>
+    </xpath>
+
+    <!-- Unit Price column on the product table shown while the picking is NOT
+         done (state != 'done'): header + per-move cell. Price comes from the
+         Sale Order line for that product (robust across multi-step warehouses
+         where the move may not carry a sale_line_id). -->
+    <xpath expr="//th[@name='th_sm_quantity']" position="after">
+      <th name="th_sm_price" class="text-end"><strong>Unit Price</strong></th>
+    </xpath>
+    <xpath expr="//table[@name='stock_move_table']/tbody/tr/td[3]" position="after">
+      <td class="text-end">
+        <span t-out="o._accurate_unit_price(move.product_id)"
+              t-options="{'widget': 'monetary', 'display_currency': o.sale_id.currency_id or o.company_id.currency_id}"/>
+      </td>
+    </xpath>
+
+    <!-- Unit Price header on the product table shown once the picking is DONE
+         (the rows themselves are rendered by the shared sub-templates below). -->
+    <xpath expr="//th[@name='th_sml_quantity']" position="after">
+      <th name="th_sml_price" class="text-end"><strong>Unit Price</strong></th>
+    </xpath>
+  </template>
+
+  <!-- Unit Price cell for the aggregated (done, no serial numbers) rows. -->
+  <template id="report_delivery_aggregated_unit_price"
+            inherit_id="stock.stock_report_delivery_aggregated_move_lines">
+    <xpath expr="//td[@name='move_line_aggregated_quantity']" position="after">
+      <td class="text-end" t-if="o._name == 'stock.picking'">
+        <span t-out="o._accurate_unit_price(aggregated_lines[line]['product'])"
+              t-options="{'widget': 'monetary', 'display_currency': o.sale_id.currency_id or o.company_id.currency_id}"/>
+      </td>
+    </xpath>
+  </template>
+
+  <!-- Unit Price cell for the per-serial/lot rows. -->
+  <template id="report_delivery_serial_unit_price"
+            inherit_id="stock.stock_report_delivery_has_serial_move_line">
+    <xpath expr="//td[@name='move_line_lot_quantity']" position="after">
+      <td class="text-end" t-if="o._name == 'stock.picking'">
+        <span t-out="o._accurate_unit_price(move_line.product_id)"
+              t-options="{'widget': 'monetary', 'display_currency': o.sale_id.currency_id or o.company_id.currency_id}"/>
+      </td>
     </xpath>
   </template>
 

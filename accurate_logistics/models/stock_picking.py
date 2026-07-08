@@ -122,6 +122,24 @@ class StockPicking(models.Model):
             return sale.accurate_shipment_ids[:1]
         return self.env['accurate.shipment']
 
+    def _accurate_unit_price(self, product):
+        """Unit price of a product for the Delivery Slip, taken from this
+        picking's Sale Order line (matched by product). This is robust across
+        multi-step warehouses where the outgoing move may not carry a
+        sale_line_id. Falls back to the product's sales price; returns 0.0 when
+        nothing is found (e.g. a manual picking with no order)."""
+        self.ensure_one()
+        if not product:
+            return 0.0
+        sale = getattr(self, 'sale_id', False)
+        if sale:
+            line = sale.order_line.filtered(
+                lambda l: l.product_id == product and not l.display_type
+            )[:1]
+            if line:
+                return line.price_unit
+        return product.lst_price or 0.0
+
     @api.depends(
         'accurate_shipment_id',
         'accurate_shipment_id.code',
