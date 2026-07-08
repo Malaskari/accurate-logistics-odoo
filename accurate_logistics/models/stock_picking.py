@@ -160,6 +160,24 @@ class StockPicking(models.Model):
             amount += qty * self._accurate_unit_price(move.product_id)
         return {'units': units, 'amount': amount}
 
+    def _accurate_slip_grand_total(self):
+        """Full amount for the Delivery Slip = Order Total + courier Delivery
+        Fee. Avoids double-counting: a website order already carries the fee as
+        a delivery line inside amount_total, whereas a manual order tracks the
+        fee only on the shipment (fee_delivery). So only add the shipment fee
+        when the order itself has no delivery line."""
+        self.ensure_one()
+        sale = getattr(self, 'sale_id', False)
+        order_total = sale.amount_total if sale else 0.0
+        # Delivery already inside the order total? (website checkout adds a line)
+        in_order = 0.0
+        if sale and 'amount_delivery' in sale._fields:
+            in_order = sale.amount_delivery or 0.0
+        if in_order:
+            return order_total
+        fee = self._accurate_resolve_shipment().fee_delivery or 0.0
+        return order_total + fee
+
     @api.depends(
         'accurate_shipment_id',
         'accurate_shipment_id.code',
