@@ -453,29 +453,47 @@ class AccurateShipment(models.Model):
                 vals['cancellation_reason_id'] = match.id
             elif rname:
                 vals['cancellation_notes'] = rname
-        # Delivery agent (courier's assigned driver). Only touch the fields when
-        # the payload actually carries an agent, so a webhook that omits it never
-        # wipes a previously-synced agent.
-        agent = data.get('lastDeliveryAgent')
-        agent_changed = False
-        if isinstance(agent, dict) and (agent.get('id') or agent.get('name')):
-            new_aid = agent.get('id') or 0
-            new_name = agent.get('name') or ''
-            if new_aid != self.agent_api_id or new_name != (self.agent_name or ''):
-                agent_changed = True
-            vals['agent_api_id'] = new_aid
-            vals['agent_name'] = new_name
-            vals['agent_phone'] = agent.get('phone') or ''
-            vals['agent_mobile'] = agent.get('mobile') or ''
+        # Delivery agent (courier's assigned driver) — see _al_agent_vals.
+        agent_vals, agent_changed = self._al_agent_vals(data)
+        vals.update(agent_vals)
         if vals:
             self.write(vals)
         if agent_changed:
-            contact = (vals.get('agent_mobile') or vals.get('agent_phone') or '')
-            self.message_post(body=(
-                '🛵 Delivery agent: <b>%s</b>%s'
-                % (vals.get('agent_name') or '—',
-                   (' — ' + contact) if contact else '')
-            ))
+            self._al_post_agent_note(agent_vals)
+
+    def _al_agent_vals(self, data):
+        """Extract delivery-agent field values from an API shipment payload
+        (``lastDeliveryAgent``). Returns ``(vals, changed)``.
+
+        Returns an empty dict when the payload carries no agent, so a webhook /
+        response that omits it never wipes a previously-synced agent. The API id
+        is coerced to int so the change check compares like-for-like against the
+        stored Integer field (a string id would otherwise flag a change on every
+        sync and spam the chatter)."""
+        self.ensure_one()
+        agent = data.get('lastDeliveryAgent')
+        if not (isinstance(agent, dict) and (agent.get('id') or agent.get('name'))):
+            return {}, False
+        try:
+            new_aid = int(agent.get('id') or 0)
+        except (TypeError, ValueError):
+            new_aid = 0
+        new_name = agent.get('name') or ''
+        changed = new_aid != self.agent_api_id or new_name != (self.agent_name or '')
+        return {
+            'agent_api_id': new_aid,
+            'agent_name': new_name,
+            'agent_phone': agent.get('phone') or '',
+            'agent_mobile': agent.get('mobile') or '',
+        }, changed
+
+    def _al_post_agent_note(self, agent_vals):
+        contact = agent_vals.get('agent_mobile') or agent_vals.get('agent_phone') or ''
+        self.message_post(body=(
+            '🛵 Delivery agent: <b>%s</b>%s'
+            % (agent_vals.get('agent_name') or '—',
+               (' — ' + contact) if contact else '')
+        ))
 
     # ── Status sync ───────────────────────────────────────────────────────────
 
@@ -680,6 +698,15 @@ class AccurateShipment(models.Model):
                     ]:
                         if data.get(src) is not None:
                             shipment[dst] = data[src]
+                    # The full record now also carries lastDeliveryAgent — capture
+                    # the courier's assigned driver on the webhook path too (this
+                    # refresh runs for the common flat webhook that has no status
+                    # name), not only on manual / bulk / cron sync.
+                    agent_vals, agent_changed = shipment._al_agent_vals(data)
+                    if agent_vals:
+                        shipment.write(agent_vals)
+                        if agent_changed:
+                            shipment._al_post_agent_note(agent_vals)
                     # The full record carries the reason even for failed
                     # deliveries (DEX) where the webhook sends none.
                     if isinstance(data.get('cancellationReason'), dict):
