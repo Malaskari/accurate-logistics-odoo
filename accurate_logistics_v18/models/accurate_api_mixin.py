@@ -426,6 +426,7 @@ class AccurateApiMixin(models.AbstractModel):
                     recipientSubzone { id name }
                     senderZone    { id name }
                     senderSubzone { id name }
+                    lastDeliveryAgent { id name phone mobile }
                 }
             }
         """

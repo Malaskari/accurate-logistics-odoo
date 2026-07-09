@@ -84,6 +84,24 @@ class AccurateShipment(models.Model):
     tracking_url = fields.Char('Tracking URL', readonly=True, copy=False)
     error_message = fields.Text('Last Error', readonly=True, copy=False)
 
+    # ── Delivery agent (courier's assigned driver) ────────────────────────────
+    # Populated automatically from the Accurate API (lastDeliveryAgent) on every
+    # status sync — assigned by the courier once the shipment is out for
+    # delivery. Never entered by hand.
+    agent_name = fields.Char('Delivery Agent', readonly=True, copy=False, tracking=True)
+    agent_phone = fields.Char('Agent Phone', readonly=True, copy=False)
+    agent_mobile = fields.Char('Agent Mobile', readonly=True, copy=False)
+    agent_api_id = fields.Integer('Agent API ID', readonly=True, copy=False)
+    agent_contact = fields.Char(
+        'Agent Contact', compute='_compute_agent_contact', store=True,
+        help='Best phone number to reach the delivery agent (mobile, else phone).',
+    )
+
+    @api.depends('agent_phone', 'agent_mobile')
+    def _compute_agent_contact(self):
+        for rec in self:
+            rec.agent_contact = rec.agent_mobile or rec.agent_phone or ''
+
     # ── Recipient ─────────────────────────────────────────────────────────────
 
     recipient_name = fields.Char('Recipient Name', tracking=True)
@@ -435,8 +453,29 @@ class AccurateShipment(models.Model):
                 vals['cancellation_reason_id'] = match.id
             elif rname:
                 vals['cancellation_notes'] = rname
+        # Delivery agent (courier's assigned driver). Only touch the fields when
+        # the payload actually carries an agent, so a webhook that omits it never
+        # wipes a previously-synced agent.
+        agent = data.get('lastDeliveryAgent')
+        agent_changed = False
+        if isinstance(agent, dict) and (agent.get('id') or agent.get('name')):
+            new_aid = agent.get('id') or 0
+            new_name = agent.get('name') or ''
+            if new_aid != self.agent_api_id or new_name != (self.agent_name or ''):
+                agent_changed = True
+            vals['agent_api_id'] = new_aid
+            vals['agent_name'] = new_name
+            vals['agent_phone'] = agent.get('phone') or ''
+            vals['agent_mobile'] = agent.get('mobile') or ''
         if vals:
             self.write(vals)
+        if agent_changed:
+            contact = (vals.get('agent_mobile') or vals.get('agent_phone') or '')
+            self.message_post(body=(
+                '🛵 Delivery agent: <b>%s</b>%s'
+                % (vals.get('agent_name') or '—',
+                   (' — ' + contact) if contact else '')
+            ))
 
     # ── Status sync ───────────────────────────────────────────────────────────
 

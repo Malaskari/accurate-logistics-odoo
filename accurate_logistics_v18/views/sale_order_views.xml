@@ -62,6 +62,13 @@
                widget="url"
                readonly="1"
                invisible="not accurate_tracking_url"/>
+        <field name="accurate_agent_name"
+               readonly="1"
+               invisible="not accurate_agent_name"/>
+        <field name="accurate_agent_phone"
+               widget="phone"
+               readonly="1"
+               invisible="not accurate_agent_phone"/>
       </xpath>
 
       <!-- New tab: Accurate Logistics (after "Other Info") -->

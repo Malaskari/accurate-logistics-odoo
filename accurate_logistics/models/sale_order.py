@@ -189,6 +189,16 @@ class SaleOrder(models.Model):
         string='Tracking URL',
         store=True,
     )
+    accurate_agent_name = fields.Char(
+        compute='_compute_accurate_shipment_summary',
+        string='Delivery Agent',
+        store=True,
+    )
+    accurate_agent_phone = fields.Char(
+        compute='_compute_accurate_shipment_summary',
+        string='Delivery Agent Phone',
+        store=True,
+    )
 
     @api.depends('accurate_shipment_ids')
     def _compute_accurate_shipment_count(self):
@@ -201,6 +211,8 @@ class SaleOrder(models.Model):
         'accurate_shipment_ids.api_status_code',
         'accurate_shipment_ids.api_status_name',
         'accurate_shipment_ids.tracking_url',
+        'accurate_shipment_ids.agent_name',
+        'accurate_shipment_ids.agent_contact',
     )
     def _compute_accurate_shipment_summary(self):
         for order in self:
@@ -210,6 +222,8 @@ class SaleOrder(models.Model):
             order.accurate_status_name = ship.api_status_name or ''
             order.accurate_status_code = (ship.api_status_code or '').upper()
             order.accurate_tracking_url = ship.tracking_url or ''
+            order.accurate_agent_name = ship.agent_name or ''
+            order.accurate_agent_phone = ship.agent_contact or ''
 
     # ── Smart button ──────────────────────────────────────────────────────────
 

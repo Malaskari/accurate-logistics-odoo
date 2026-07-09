@@ -99,6 +99,14 @@ class StockPicking(models.Model):
         string='Tracking URL',
         compute='_compute_accurate_shipment_info',
     )
+    accurate_agent_name = fields.Char(
+        string='Delivery Agent',
+        compute='_compute_accurate_shipment_info',
+    )
+    accurate_agent_phone = fields.Char(
+        string='Delivery Agent Phone',
+        compute='_compute_accurate_shipment_info',
+    )
 
     # Salesperson who created the linked Sale Order — surfaced on the Transfers
     # list so warehouse / dispatch staff can see who sold each order. Stored so
@@ -188,6 +196,10 @@ class StockPicking(models.Model):
         'sale_id.accurate_shipment_ids.code',
         'sale_id.accurate_shipment_ids.api_status_name',
         'sale_id.accurate_shipment_ids.tracking_url',
+        'accurate_shipment_id.agent_name',
+        'accurate_shipment_id.agent_contact',
+        'sale_id.accurate_shipment_ids.agent_name',
+        'sale_id.accurate_shipment_ids.agent_contact',
     )
     def _compute_accurate_shipment_info(self):
         for rec in self:
@@ -195,6 +207,8 @@ class StockPicking(models.Model):
             rec.accurate_shipment_code = ship.code or ''
             rec.accurate_status = ship.api_status_name or ''
             rec.accurate_tracking_url = ship.tracking_url or ''
+            rec.accurate_agent_name = ship.agent_name or ''
+            rec.accurate_agent_phone = ship.agent_contact or ''
 
     def _search_accurate_shipment_code(self, operator, value):
         """Make the computed shipment code searchable: match pickings linked

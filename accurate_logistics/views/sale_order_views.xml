@@ -62,6 +62,13 @@
                widget="url"
                readonly="1"
                invisible="not accurate_tracking_url"/>
+        <field name="accurate_agent_name"
+               readonly="1"
+               invisible="not accurate_agent_name"/>
+        <field name="accurate_agent_phone"
+               widget="phone"
+               readonly="1"
+               invisible="not accurate_agent_phone"/>
       </xpath>
 
       <!-- New tab: Accurate Logistics (after "Other Info") -->
@@ -163,15 +170,15 @@
     <field name="model">sale.order</field>
     <field name="inherit_id" ref="sale.view_sales_order_filter"/>
     <field name="arch" type="xml">
-      <!-- Searchable fields go in the field zone (after partner_id). -->
-      <xpath expr="//field[@name='partner_id']" position="after">
+      <xpath expr="//search" position="inside">
+        <separator/>
         <field name="accurate_shipment_code" string="Shipment Code"/>
         <field name="accurate_status_name" string="Delivery Status"/>
-        <field name="accurate_delivery_company_id" string="Delivery Company"/>
+        <field name="accurate_delivery_company_id"
+               string="Delivery Company"/>
         <field name="accurate_service_id" string="Shipping Service"/>
-      </xpath>
-      <!-- Filters before the Group-By group. -->
-      <xpath expr="//search/group[1]" position="before">
+        <field name="accurate_recipient_zone_id" string="Recipient Zone"/>
+        <field name="accurate_recipient_subzone_id" string="Recipient Sub-zone"/>
         <separator/>
         <filter string="Has Accurate Shipment"
                 name="filter_has_shipment"
@@ -189,21 +196,27 @@
         <filter string="Cancelled / Returned"
                 name="filter_cancelled_returned"
                 domain="[('accurate_status_code', 'in', ['FAILED','CANCELLED','CANCELED','RETURNED','RTN','REJECTED','RJCT','RTRN'])]"/>
-      </xpath>
-      <!-- Group-by filters into the existing Group-By group. -->
-      <xpath expr="//search/group[1]" position="inside">
-        <filter string="Delivery Status"
-                name="group_by_delivery_status"
-                context="{'group_by': 'accurate_status_name'}"/>
-        <filter string="Delivery Company"
-                name="group_by_delivery_company"
-                context="{'group_by': 'accurate_delivery_company_id'}"/>
-        <filter string="Shipping Service"
-                name="group_by_shipping_service"
-                context="{'group_by': 'accurate_service_id'}"/>
-        <filter string="Recipient Zone"
-                name="group_by_recipient_zone"
-                context="{'group_by': 'accurate_recipient_zone_id'}"/>
+        <filter string="Pending / Other"
+                name="filter_other_status"
+                domain="[('accurate_shipment_code', '!=', False),
+                        ('accurate_status_code', 'not in',
+                         ['DEL','DLV','DELIVERED','DELIVERY','DTR',
+                          'SENT','IN_TRANSIT','OUT_FOR_DELIVERY','PICKED','OUT','OTD','STD',
+                          'FAILED','CANCELLED','CANCELED','RETURNED','RTN','REJECTED','RJCT','RTRN'])]"/>
+        <group expand="0" string="Group By">
+          <filter string="Delivery Status"
+                  name="group_by_delivery_status"
+                  context="{'group_by': 'accurate_status_name'}"/>
+          <filter string="Delivery Company"
+                  name="group_by_delivery_company"
+                  context="{'group_by': 'accurate_delivery_company_id'}"/>
+          <filter string="Shipping Service"
+                  name="group_by_shipping_service"
+                  context="{'group_by': 'accurate_service_id'}"/>
+          <filter string="Recipient Zone"
+                  name="group_by_recipient_zone"
+                  context="{'group_by': 'accurate_recipient_zone_id'}"/>
+        </group>
       </xpath>
     </field>
   </record>

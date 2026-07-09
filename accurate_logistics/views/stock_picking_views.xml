@@ -10,6 +10,8 @@
       <xpath expr="//field[@name='origin']" position="after">
         <field name="accurate_shipment_code" string="Shipment" optional="show"/>
         <field name="accurate_status" string="Delivery Status" optional="show"/>
+        <field name="accurate_agent_name" string="Delivery Agent" optional="show"/>
+        <field name="accurate_agent_phone" string="Agent Phone" optional="hide"/>
         <field name="accurate_salesperson_id" string="Salesperson" optional="show"/>
       </xpath>
     </field>
@@ -95,6 +97,10 @@
             <field name="accurate_shipment_id" readonly="1"/>
             <field name="accurate_shipment_code" readonly="1"/>
             <field name="accurate_status" readonly="1"/>
+            <field name="accurate_agent_name" readonly="1"
+                   invisible="not accurate_agent_name"/>
+            <field name="accurate_agent_phone" widget="phone" readonly="1"
+                   invisible="not accurate_agent_phone"/>
             <field name="accurate_tracking_url" readonly="1" widget="url"/>
           </group>
         </page>

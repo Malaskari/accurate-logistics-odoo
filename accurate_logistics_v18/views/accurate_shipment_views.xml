@@ -131,6 +131,18 @@
             </group>
           </group>
 
+          <group string="Delivery Agent" invisible="not agent_name"
+                 name="accurate_delivery_agent">
+            <group>
+              <field name="agent_name" readonly="1"/>
+              <field name="agent_mobile" widget="phone" readonly="1"/>
+            </group>
+            <group>
+              <field name="agent_phone" widget="phone" readonly="1"
+                     invisible="not agent_phone"/>
+            </group>
+          </group>
+
           <group>
             <group string="Dates">
               <field name="date"/>
