@@ -489,11 +489,16 @@ class AccurateShipment(models.Model):
 
     def _al_post_agent_note(self, agent_vals):
         contact = agent_vals.get('agent_mobile') or agent_vals.get('agent_phone') or ''
-        self.message_post(body=(
-            '🛵 Delivery agent: <b>%s</b>%s'
-            % (agent_vals.get('agent_name') or '—',
-               (' — ' + contact) if contact else '')
-        ))
+        name = agent_vals.get('agent_name') or '—'
+        suffix = (' — ' + contact) if contact else ''
+        # Detailed timeline on the shipment…
+        self.message_post(body='🛵 Delivery agent: <b>%s</b>%s' % (name, suffix))
+        # …and a clean lifecycle note on the linked Sale Order chatter so the
+        # salesperson sees who is delivering (Arabic for ar_ users).
+        self._so_status_log(
+            en_msg='🛵 Delivery agent assigned: <b>%s</b>%s' % (name, suffix),
+            ar_msg='🛵 تم تعيين مندوب التوصيل: <b>%s</b>%s' % (name, suffix),
+        )
 
     # ── Status sync ───────────────────────────────────────────────────────────
 
