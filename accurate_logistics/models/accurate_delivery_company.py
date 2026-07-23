@@ -324,6 +324,12 @@ class AccurateDeliveryCompany(models.Model):
             }
             try:
                 existing = self._al_find_product_by_code(product.default_code)
+                if not existing.get('id'):
+                    # Accurate enforces UNIQUE product names. If a product with
+                    # this exact name already exists (manually created, or
+                    # code mismatch), update THAT record — attaching our code —
+                    # instead of failing on the name collision.
+                    existing = self._al_find_product_by_name(product.name)
                 if existing.get('id'):
                     vals['id'] = existing['id']
                 self._al_save_product(vals)

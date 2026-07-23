@@ -461,8 +461,26 @@ class AccurateShipment(models.Model):
         try:
             result = self.delivery_company_id._al_save_shipment(inp)
         except Exception as exc:
-            self.write({'state': 'error', 'error_message': str(exc)})
-            raise
+            # Product-itemized shipments draw from stock held in the COURIER's
+            # warehouse; when it has none ("لا يوجد كمية كافية"), retry once
+            # without the product lines so dispatch itself never blocks.
+            if inp.get('shipmentProducts'):
+                inp_no_products = {k: v for k, v in inp.items()
+                                   if k != 'shipmentProducts'}
+                try:
+                    result = self.delivery_company_id._al_save_shipment(inp_no_products)
+                    self._chatter(
+                        '<b>Sent without product lines</b> — the courier '
+                        'rejected the itemized shipment (usually: no stock of '
+                        'these products in the courier warehouse). Partial '
+                        'deliveries on this shipment will need manual '
+                        'reconciliation.<br/>API said: %s' % str(exc)[:300])
+                except Exception as exc2:
+                    self.write({'state': 'error', 'error_message': str(exc2)})
+                    raise
+            else:
+                self.write({'state': 'error', 'error_message': str(exc)})
+                raise
 
         self._apply_api_response(result)
         self.write({'state': 'sent', 'error_message': False})

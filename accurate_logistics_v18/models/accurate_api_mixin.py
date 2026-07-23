@@ -474,6 +474,26 @@ class AccurateApiMixin(models.AbstractModel):
                 return row
         return {}
 
+    def _al_find_product_by_name(self, name):
+        """Look up ONE catalog product by its exact name. Used as a fallback
+        when the code lookup misses but the tenant's unique-name constraint
+        would reject a create."""
+        if not name:
+            return {}
+        query = """
+            query FindProductByName($input: ListProductsFilterInput, $first: Int!) {
+                listProducts(input: $input, first: $first) {
+                    data { id code name price weight active }
+                }
+            }
+        """
+        data = self._al_request(query, {'input': {'name': name}, 'first': 10})
+        rows = ((data.get('listProducts') or {}).get('data')) or []
+        for row in rows:
+            if (row.get('name') or '').strip() == name.strip():
+                return row
+        return {}
+
     def _al_save_product(self, product_input):
         """Create/update ONE catalog product (upsert by id when given).
         product_input matches ProductInput: {id?, code, name, price, weight?,
