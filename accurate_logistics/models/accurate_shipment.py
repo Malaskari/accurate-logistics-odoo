@@ -1488,12 +1488,18 @@ class AccurateShipment(models.Model):
             self.write({'invoice_id': invoice.id,
                         'payment_id': payment.id if payment else False})
 
-            # Money mismatch → warn accounting, never block.
-            if self.delivered_amount and abs(self.delivered_amount - computed_value) > 0.01:
-                self._chatter(
-                    '<b>⚠️ Amount check:</b> courier deliveredAmount = %.2f, '
-                    'computed delivered value = %.2f — please verify.'
-                    % (self.delivered_amount, computed_value))
+            # Money mismatch → warn accounting, never block. The courier's
+            # deliveredAmount includes THEIR delivery fee (confirmed on real
+            # shipments: goods + fee_delivery), so both shapes are expected.
+            if self.delivered_amount:
+                expected_with_fee = computed_value + (self.fee_delivery or 0.0)
+                if (abs(self.delivered_amount - computed_value) > 0.01
+                        and abs(self.delivered_amount - expected_with_fee) > 0.01):
+                    self._chatter(
+                        '<b>⚠️ Amount check:</b> courier deliveredAmount = %.2f, '
+                        'expected %.2f (goods) or %.2f (goods + delivery fee) '
+                        '— please verify.'
+                        % (self.delivered_amount, computed_value, expected_with_fee))
 
             if self.price_type_code == 'INCLD':
                 self._book_shipping_fee_expense()
