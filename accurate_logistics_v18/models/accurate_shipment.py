@@ -662,7 +662,20 @@ class AccurateShipment(models.Model):
             if data:
                 old_code = rec.api_status_code
                 rec._apply_api_response(data)
-                if rec.api_status_code != old_code:
+                # State-based dispatch, same as the bulk sync / cron — the
+                # form's Sync Status button must ALSO fire the delivered /
+                # partial / returned / cancelled flows (all idempotent),
+                # otherwise a manually-synced shipment just gets a status
+                # label and no processing.
+                company = rec.delivery_company_id
+                code, name = rec.api_status_code, rec.api_status_name
+                if company._is_delivered_code(code, name):
+                    rec._on_delivered()
+                elif company._is_returned_code(code, name) and rec.state != 'returned':
+                    rec._on_returned()
+                elif company._is_cancelled_code(code, name) and rec.state != 'cancelled':
+                    rec._on_cancelled()
+                elif rec.api_status_code != old_code:
                     rec.message_post(
                         body='Status updated: <b>%s</b>' % (rec.api_status_name or rec.api_status_code)
                     )
