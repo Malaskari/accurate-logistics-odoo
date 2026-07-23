@@ -51,6 +51,11 @@
                   string="Sync Cancellation Reasons"
                   type="object"
                   class="btn-secondary"/>
+          <button name="action_push_products_to_accurate"
+                  string="Push Products to Accurate"
+                  type="object"
+                  class="btn-secondary"
+                  confirm="Push every saleable product that has an Internal Reference (SKU) to this company's Accurate product list (create or update by SKU)? This keeps both catalogs aligned so partial deliveries reconcile per product."/>
           <button name="action_validate_price_list"
                   string="Validate Price List"
                   type="object"

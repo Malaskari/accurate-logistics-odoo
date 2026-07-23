@@ -17,6 +17,10 @@
                      help="When a delivery order is validated and a Delivery Company is set, automatically create the shipment in Accurate Logistics.">
               <field name="accurate_auto_create"/>
             </setting>
+            <setting string="Auto-process partial deliveries"
+                     help="When the courier reports a partial delivery, automatically validate the delivered quantities, create the return picking, invoice only the delivered part and register the COD payment. Falls back to a staff notification whenever the data does not match.">
+              <field name="accurate_auto_partial"/>
+            </setting>
           </block>
 
           <block title="Webhook" name="accurate_webhook">

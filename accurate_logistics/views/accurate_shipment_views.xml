@@ -9,6 +9,7 @@
       <list string="Shipments"
             decoration-success="state == 'delivered'"
             decoration-info="state == 'sent'"
+            decoration-warning="state == 'partial'"
             decoration-danger="state in ('error', 'returned', 'cancelled')"
             decoration-muted="state == 'draft'">
         <header>
@@ -31,7 +32,7 @@
                decoration-success="state == 'delivered'"
                decoration-info="state == 'sent'"
                decoration-danger="state in ('error', 'returned', 'cancelled')"
-               decoration-warning="state == 'draft'"/>
+               decoration-warning="state in ('draft', 'partial')"/>
         <field name="date"/>
       </list>
     </field>
@@ -256,11 +257,18 @@
             <!-- Tab 4: Products -->
             <page string="Products" name="products">
               <field name="product_ids">
-                <list editable="bottom">
+                <list editable="bottom"
+                      decoration-danger="returned_qty &gt; 0"
+                      decoration-success="delivered_qty &gt; 0 and returned_qty == 0">
                   <field name="sequence" widget="handle"/>
+                  <field name="product_id"/>
+                  <field name="default_code" string="SKU"/>
                   <field name="name"/>
                   <field name="quantity"/>
                   <field name="price"/>
+                  <field name="delivered_qty" string="Delivered"/>
+                  <field name="returned_qty" string="Returned"/>
+                  <field name="api_product_id" optional="hide"/>
                 </list>
               </field>
             </page>
@@ -275,6 +283,16 @@
                 <group>
                   <field name="fee_collection" readonly="1"/>
                   <field name="fee_total" readonly="1"/>
+                </group>
+              </group>
+              <group string="Partial Delivery (from API)"
+                     invisible="not delivered_amount and not returned_value and not return_status_name">
+                <group>
+                  <field name="delivered_amount" readonly="1"/>
+                  <field name="returned_value" readonly="1"/>
+                </group>
+                <group>
+                  <field name="return_status_name" readonly="1"/>
                 </group>
               </group>
             </page>

@@ -57,6 +57,7 @@ class AccurateShipment(models.Model):
             ('draft', 'Draft'),
             ('sent', 'Sent'),
             ('delivered', 'Delivered'),
+            ('partial', 'Partially Delivered'),
             ('returned', 'Returned'),
             ('cancelled', 'Cancelled'),
             ('error', 'Error'),
@@ -210,6 +211,24 @@ class AccurateShipment(models.Model):
     fee_collection = fields.Float('Collection Fees', readonly=True, digits=(16, 2))
     fee_total = fields.Float('Total', readonly=True, digits=(16, 2), tracking=True)
 
+    # ── Partial-delivery outcome (filled from API) ────────────────────────────
+    delivered_amount = fields.Float(
+        'Delivered Amount', readonly=True, copy=False, digits=(16, 2),
+        help="Value the courier actually collected for the DELIVERED part "
+             "(API deliveredAmount) — the COD payment source of truth on a "
+             "partial delivery.",
+    )
+    returned_value = fields.Float(
+        'Returned Value', readonly=True, copy=False, digits=(16, 2),
+    )
+    return_status_name = fields.Char('Return Status', readonly=True, copy=False)
+    partial_notified = fields.Boolean(
+        'Partial Fallback Notified', readonly=True, copy=False,
+        help='Set once staff have been notified that this partial delivery '
+             'needs manual processing — prevents the cron/webhook from '
+             're-notifying on every sync. Cleared by Reset to Draft.',
+    )
+
     # ── ORM ───────────────────────────────────────────────────────────────────
 
     @api.model_create_multi
@@ -293,6 +312,53 @@ class AccurateShipment(models.Model):
         if digits and digits[0] != '0':
             digits = '0' + digits
         return digits or value
+
+    def _al_resolve_product_lines(self):
+        """Build the shipmentProducts payload: [{productId, quantity, price}].
+
+        Each line's SKU (product Internal Reference) is matched against
+        Accurate's product list (Product.code) and the resolved courier-side id
+        is cached on the line (api_product_id). Returns [] — and posts ONE
+        chatter warning — if any line has no SKU or no match, so we never send
+        a partial product list. Dispatch itself is never blocked."""
+        self.ensure_one()
+        if not self.product_ids:
+            return []
+        company = self.delivery_company_id
+        problems = []
+        payload = []
+        for line in self.product_ids:
+            sku = line.default_code or (line.product_id.default_code if line.product_id else '')
+            if not sku:
+                problems.append('%s — no Internal Reference (SKU)' % (line.name or '?'))
+                continue
+            api_pid = line.api_product_id
+            if not api_pid:
+                try:
+                    match = company._al_find_product_by_code(sku)
+                except Exception as exc:
+                    problems.append('%s — product lookup failed (%s)' % (sku, exc))
+                    continue
+                api_pid = match.get('id') or 0
+                if api_pid:
+                    line.api_product_id = api_pid
+            if not api_pid:
+                problems.append('%s — not found in the Accurate product list' % sku)
+                continue
+            payload.append({
+                'productId': api_pid,
+                'quantity': int(round(line.quantity or 0)) or 1,
+                'price': line.price or 0.0,
+            })
+        if problems:
+            self._chatter(
+                '<b>Products not sent to Accurate</b> (shipment goes without '
+                'product lines, so a partial delivery cannot auto-reconcile):'
+                '<br/>• ' + '<br/>• '.join(problems)
+                + '<br/>Fix the SKUs / Accurate product list and re-send.'
+            )
+            return []
+        return payload
 
     def _send_to_api(self):
         self.ensure_one()
@@ -379,11 +445,15 @@ class AccurateShipment(models.Model):
                 'width': self.size_width,
                 'height': self.size_height,
             }
-        if self.product_ids:
-            inp['shipmentProducts'] = [
-                {'name': p.name, 'quantity': p.quantity, 'price': p.price}
-                for p in self.product_ids
-            ]
+        # Product lines: the API's ShipmentProductInput takes productId (the
+        # courier-side catalog id) — NOT a free-text name. Resolve each line's
+        # SKU against Accurate's product list; send the lines only when EVERY
+        # line resolves (a partial list would corrupt per-product
+        # reconciliation on partial deliveries). Missing SKU / unmatched code
+        # → skip products entirely with a chatter warning; never block dispatch.
+        product_lines = self._al_resolve_product_lines()
+        if product_lines:
+            inp['shipmentProducts'] = product_lines
 
         if not self.delivery_company_id:
             raise UserError('No Delivery Company selected. Cannot send to API.')
@@ -456,10 +526,63 @@ class AccurateShipment(models.Model):
         # Delivery agent (courier's assigned driver) — see _al_agent_vals.
         agent_vals, agent_changed = self._al_agent_vals(data)
         vals.update(agent_vals)
+        # Partial-delivery outcome (shipment-level amounts + per-product lines).
+        vals.update(self._al_partial_vals(data))
         if vals:
             self.write(vals)
+        self._al_apply_product_results(data)
         if agent_changed:
             self._al_post_agent_note(agent_vals)
+
+    def _al_partial_vals(self, data):
+        """Shipment-level partial-outcome values from an API payload. Only the
+        keys present in the payload are returned, so syncs that omit them never
+        wipe previously-stored values."""
+        vals = {}
+        for src, dst in [
+            ('deliveredAmount', 'delivered_amount'),
+            ('returnedValue', 'returned_value'),
+        ]:
+            if data.get(src) is not None:
+                vals[dst] = data[src]
+        rstatus = data.get('returnStatus')
+        if isinstance(rstatus, dict) and (rstatus.get('name') or rstatus.get('code')):
+            vals['return_status_name'] = rstatus.get('name') or rstatus.get('code')
+        return vals
+
+    def _al_apply_product_results(self, data):
+        """Write per-line delivered / returned quantities from the API's
+        shipmentProducts rows. A row is matched to an Odoo line by the courier
+        product id first, then by SKU (Product.code == default_code).
+
+        Returns the list of rows that could NOT be matched (empty = all good);
+        the partial-processing guardrails treat any unmatched row as unsafe."""
+        rows = data.get('shipmentProducts')
+        if not isinstance(rows, list) or not rows:
+            return []
+        unmatched = []
+        for row in rows:
+            prod = row.get('product') or {}
+            pid = prod.get('id')
+            code = (prod.get('code') or '').strip()
+            line = self.product_ids.filtered(
+                lambda l: pid and l.api_product_id == pid
+            )[:1]
+            if not line and code:
+                line = self.product_ids.filtered(
+                    lambda l: (l.default_code or '').strip() == code
+                )[:1]
+            if not line:
+                unmatched.append(row)
+                continue
+            line_vals = {
+                'delivered_qty': row.get('delivered') or 0,
+                'returned_qty': row.get('returned') or 0,
+            }
+            if pid and not line.api_product_id:
+                line_vals['api_product_id'] = pid
+            line.write(line_vals)
+        return unmatched
 
     def _al_agent_vals(self, data):
         """Extract delivery-agent field values from an API shipment payload
@@ -712,6 +835,12 @@ class AccurateShipment(models.Model):
                         shipment.write(agent_vals)
                         if agent_changed:
                             shipment._al_post_agent_note(agent_vals)
+                    # Partial-delivery data (amounts + per-product results) —
+                    # applied on the webhook path too, same lesson as the agent.
+                    partial_vals = shipment._al_partial_vals(data)
+                    if partial_vals:
+                        shipment.write(partial_vals)
+                    shipment._al_apply_product_results(data)
                     # The full record carries the reason even for failed
                     # deliveries (DEX) where the webhook sends none.
                     if isinstance(data.get('cancellationReason'), dict):
@@ -827,8 +956,28 @@ class AccurateShipment(models.Model):
         """
         Auto-create customer invoice + COD payment when Accurate marks a
         shipment as delivered.  Posted to the Delivery Company's journal.
+
+        PARTIAL deliveries are intercepted first: when the courier reports
+        per-product returned quantities (PDP), the flow routes to
+        _on_partially_delivered instead of the full-delivery flow below.
         """
         self.ensure_one()
+
+        # ── Partial-delivery interception ─────────────────────────────────
+        partial_data = None
+        if self.product_ids:
+            # Refresh the per-product results best-effort so the decision is
+            # made on CURRENT data whichever path dispatched us (webhook may
+            # have skipped its refresh when the status name was present).
+            try:
+                partial_data = self._accurate_refresh_partial_data()
+            except Exception as exc:
+                _logger.info(
+                    'Accurate: partial-data refresh failed for %s '
+                    '(deciding on stored data): %s', self.name, exc,
+                )
+            if self._accurate_partial_signals():
+                return self._on_partially_delivered(partial_data)
 
         # Mark as delivered + log only the FIRST time (idempotent re-runs).
         if self.state != 'delivered':
@@ -943,6 +1092,457 @@ class AccurateShipment(models.Model):
             # record the difference as a shipping expense.
             if self.price_type_code == 'INCLD':
                 self._book_shipping_fee_expense()
+
+    # ── Partial delivery (PDP) engine ─────────────────────────────────────────
+
+    def _accurate_refresh_partial_data(self):
+        """Re-fetch the shipment from the API and apply the partial-outcome
+        data (amounts + per-product delivered/returned). Returns the raw data
+        dict (or None) so the caller can run guardrails against the actual
+        API rows."""
+        self.ensure_one()
+        company = self.delivery_company_id
+        if not company or not (self.api_id or self.code):
+            return None
+        data = company._al_get_shipment(api_id=self.api_id, code=self.code)
+        if not data:
+            return None
+        vals = self._al_partial_vals(data)
+        agent_vals, agent_changed = self._al_agent_vals(data)
+        vals.update(agent_vals)
+        if vals:
+            self.write(vals)
+        if agent_changed:
+            self._al_post_agent_note(agent_vals)
+        self._al_apply_product_results(data)
+        return data
+
+    def _accurate_partial_signals(self):
+        """True when the courier reported that part of THIS shipment came
+        back: any product line with returned > 0, or a shipment-level
+        returnedValue > 0."""
+        self.ensure_one()
+        if any(l.returned_qty > 0 for l in self.product_ids):
+            return True
+        return bool(self.returned_value and self.returned_value > 0
+                    and self.product_ids)
+
+    def _accurate_partial_breakdown_html(self):
+        """Small HTML table: per product — ordered / delivered / returned."""
+        self.ensure_one()
+        rows = ''.join(
+            '<tr><td style="padding:2px 8px;">%s</td>'
+            '<td style="padding:2px 8px;text-align:center;">%s</td>'
+            '<td style="padding:2px 8px;text-align:center;">%s</td>'
+            '<td style="padding:2px 8px;text-align:center;">%s</td></tr>'
+            % (l.name or (l.product_id.display_name if l.product_id else '?'),
+               int(l.quantity), int(l.delivered_qty), int(l.returned_qty))
+            for l in self.product_ids
+        )
+        return (
+            '<table style="border-collapse:collapse;" border="1">'
+            '<tr><th style="padding:2px 8px;">Product</th>'
+            '<th style="padding:2px 8px;">Ordered</th>'
+            '<th style="padding:2px 8px;">Delivered</th>'
+            '<th style="padding:2px 8px;">Returned</th></tr>'
+            + rows + '</table>'
+        )
+
+    def _notify_partial_manual(self, reason):
+        """Fallback when a partial delivery is NOT safe to auto-process:
+        chatter breakdown on shipment + SO, and ONE warning activity on the
+        Sale Order for the notify users (or salesperson). Idempotent via
+        partial_notified."""
+        self.ensure_one()
+        if self.partial_notified:
+            return
+        breakdown = self._accurate_partial_breakdown_html()
+        body = (
+            '<b>⚠️ Partial delivery needs manual processing.</b><br/>%s<br/>%s'
+            '<br/>الشحنة سُلِّمت جزئيًا وتحتاج معالجة يدوية — السبب: %s'
+        ) % (reason, breakdown, reason)
+        self._chatter(body)
+        self._so_status_log(
+            en_msg=body,
+            ar_msg=('<b>⚠️ تسليم جزئي يحتاج معالجة يدوية.</b><br/>%s<br/>%s'
+                    % (reason, breakdown)),
+        )
+        sale = self.sale_id
+        if sale:
+            company = self.delivery_company_id
+            users = company.notify_user_ids if company else self.env['res.users']
+            if not users:
+                users = (sale.user_id or self.env['res.users']) | self.create_uid
+            activity_type = self.env.ref(
+                'mail.mail_activity_data_warning', raise_if_not_found=False,
+            ) or self.env.ref('mail.mail_activity_data_todo', raise_if_not_found=False)
+            so_model_id = self.env['ir.model']._get_id('sale.order')
+            for user in users:
+                try:
+                    self.env['mail.activity'].create({
+                        'res_model_id': so_model_id,
+                        'res_model': 'sale.order',
+                        'res_id': sale.id,
+                        'activity_type_id': activity_type.id if activity_type else False,
+                        'summary': 'Accurate: partial delivery — manual processing needed',
+                        'note': body,
+                        'user_id': user.id,
+                        'date_deadline': fields.Date.today(),
+                    })
+                except Exception as exc:
+                    _logger.warning(
+                        'Accurate: partial-fallback activity failed for %s: %s',
+                        sale.name, exc,
+                    )
+        self.partial_notified = True
+
+    def _on_partially_delivered(self, partial_data=None):
+        """Auto-process a PARTIAL delivery (guarded — falls back to
+        notify-only whenever the data is not fully consistent):
+
+        1. Stock — outgoing not done: validate the delivered qty per SKU and
+           cancel the backorder (returned goods never shipped, no return
+           picking needed). Outgoing already done: create a return picking
+           for the returned qty only.
+        2. Invoice the DELIVERED part only, post it.
+        3. COD payment = API deliveredAmount (fallback: computed delivered
+           value), capped at the invoice residual.
+        4. State → 'partial' + EN/AR breakdown on shipment & SO.
+        """
+        self.ensure_one()
+
+        # Idempotency.
+        if self.state == 'partial' and self.invoice_id:
+            return
+        if self.partial_notified and not self.invoice_id:
+            return  # staff already notified; they process manually.
+
+        # Setting gate (default ON).
+        auto = self.env['ir.config_parameter'].sudo().get_param(
+            'accurate_logistics.auto_process_partials', 'True')
+        if str(auto).strip().lower() in ('false', '0', ''):
+            return self._notify_partial_manual(
+                'Auto-processing of partial deliveries is disabled in Settings.')
+
+        lines = self.product_ids
+        sale = self.sale_id
+
+        # ── Guardrails ────────────────────────────────────────────────────
+        rows = (partial_data or {}).get('shipmentProducts') or []
+        for row in rows:
+            prod = row.get('product') or {}
+            pid, code = prod.get('id'), (prod.get('code') or '').strip()
+            matched = lines.filtered(
+                lambda l: (pid and l.api_product_id == pid)
+                or (code and (l.default_code or '').strip() == code)
+            )
+            if not matched and (row.get('delivered') or row.get('returned')):
+                return self._notify_partial_manual(
+                    'Courier reported product "%s" (code %s) which does not '
+                    'match any shipment line.' % (prod.get('name') or '?', code or '?'))
+        for l in lines:
+            if not l.product_id:
+                return self._notify_partial_manual(
+                    'Line "%s" is not linked to an Odoo product.' % (l.name or '?'))
+            if abs((l.delivered_qty + l.returned_qty) - l.quantity) > 0.001:
+                return self._notify_partial_manual(
+                    'Quantity mismatch on %s: delivered %s + returned %s ≠ shipped %s.'
+                    % (l.default_code or l.name, int(l.delivered_qty),
+                       int(l.returned_qty), int(l.quantity)))
+
+        total_delivered = sum(l.delivered_qty for l in lines)
+        if total_delivered <= 0:
+            # Everything came back → this is a FULL return, reuse that flow.
+            return self._on_returned()
+
+        if sale and sale.invoice_ids.filtered(
+            lambda i: i.state == 'posted' and i.move_type == 'out_invoice'
+        ):
+            return self._notify_partial_manual(
+                'The order is already invoiced — adjust the invoice manually '
+                '(credit note for the returned part).')
+
+        # ── 1. Stock ──────────────────────────────────────────────────────
+        pickings = self.env['stock.picking']
+        if sale:
+            pickings |= sale.picking_ids
+        if self.picking_id:
+            pickings |= self.picking_id
+        outgoing = pickings.filtered(lambda p: p.picking_type_code == 'outgoing')
+        outgoing_pending = outgoing.filtered(
+            lambda p: p.state in ('confirmed', 'waiting', 'assigned'))
+        outgoing_done = outgoing.filtered(lambda p: p.state == 'done')
+        internal_pending = pickings.filtered(
+            lambda p: p.picking_type_code != 'outgoing'
+            and p.state not in ('done', 'cancel'))
+
+        delivered_map = {l.product_id: l.delivered_qty for l in lines}
+        returned_map = {l.product_id: l.returned_qty
+                        for l in lines if l.returned_qty > 0}
+
+        # Kit/BoM guard: a partially-returned product must exist as REAL moves
+        # on the outgoing picking. Kit parents explode into component moves, so
+        # per-product reconciliation of a returned kit is ambiguous → manual.
+        for product in returned_map:
+            if not outgoing.move_ids.filtered(
+                lambda m: m.product_id == product and m.state != 'cancel'
+            ):
+                return self._notify_partial_manual(
+                    'Returned product %s has no matching stock move on the '
+                    'outgoing delivery (kit/BoM product?) — reconcile manually.'
+                    % (product.default_code or product.display_name))
+
+        if outgoing_done:
+            # Goods already fully shipped → bring the returned part back.
+            self._create_partial_return_picking(outgoing_done, returned_map)
+        elif outgoing_pending:
+            if internal_pending:
+                return self._notify_partial_manual(
+                    'Internal warehouse step(s) %s are not done yet.'
+                    % ', '.join(internal_pending.mapped('name')))
+            for pick in outgoing_pending:
+                try:
+                    if pick.state in ('confirmed', 'waiting'):
+                        pick.action_assign()
+                except Exception:
+                    pass
+                for move in pick.move_ids:
+                    if move.state in ('done', 'cancel'):
+                        continue
+                    qty = delivered_map.get(move.product_id)
+                    if qty is None:
+                        qty = move.product_uom_qty  # not shipment-tracked → full
+                    for fname in ('quantity', 'quantity_done'):
+                        if fname in move._fields:
+                            try:
+                                setattr(move, fname, qty)
+                            except Exception:
+                                pass
+                            break
+                try:
+                    ctx = {'skip_backorder': True, 'skip_sms': True,
+                           'cancel_backorder': True, 'skip_immediate': True}
+                    res = pick.with_context(**ctx).button_validate()
+                    if isinstance(res, dict) and res.get('res_model') in (
+                        'stock.backorder.confirmation', 'stock.immediate.transfer',
+                    ):
+                        wctx = res.get('context', {}) or {}
+                        wiz = self.env[res['res_model']].with_context(**wctx).create({})
+                        if hasattr(wiz, 'process_cancel_backorder'):
+                            wiz.process_cancel_backorder()
+                        elif hasattr(wiz, 'process'):
+                            wiz.process()
+                    # Some Odoo versions still spawn the backorder despite the
+                    # cancel_backorder context — cancel any leftover explicitly
+                    # (the undelivered part comes back with the courier, it is
+                    # never shipped again).
+                    leftover = self.env['stock.picking'].search([
+                        ('backorder_id', '=', pick.id),
+                        ('state', 'not in', ('done', 'cancel')),
+                    ])
+                    if leftover:
+                        leftover.action_cancel()
+                        self._chatter(
+                            'Cancelled backorder <b>%s</b> (undelivered part '
+                            'returns with the courier).'
+                            % ', '.join(leftover.mapped('name')))
+                    self._chatter(
+                        'Partial delivery: validated <b>%s</b> with the '
+                        'delivered quantities (rest cancelled — courier '
+                        'returns it).' % pick.name)
+                except Exception as exc:
+                    return self._notify_partial_manual(
+                        'Could not validate picking %s with the delivered '
+                        'quantities: %s' % (pick.name, exc))
+
+        # ── 2+3. Invoice delivered part + COD payment ─────────────────────
+        delivery_company = self.delivery_company_id
+        if not sale or not delivery_company or not delivery_company.journal_id:
+            self._accurate_finish_partial(invoice=None)
+            return
+
+        invoices = self.env['account.move']
+        try:
+            if sale.invoice_status in ('to invoice', 'no'):
+                invoices = sale._create_invoices()
+            elif sale.invoice_ids.filtered(lambda i: i.state == 'draft'):
+                invoices = sale.invoice_ids.filtered(lambda i: i.state == 'draft')
+        except Exception as exc:
+            return self._notify_partial_manual(
+                'Could not create the invoice for the delivered part: %s' % exc)
+        if not invoices:
+            return self._notify_partial_manual(
+                'Nothing invoiceable found for the delivered part.')
+
+        computed_value = sum(l.delivered_qty * (l.price or 0.0) for l in lines)
+        delivered_by_pid = {p.id: q for p, q in delivered_map.items()}
+        for invoice in invoices:
+            # Align invoice lines to the DELIVERED quantities (covers
+            # ordered-quantity invoice-policy products and full drafts
+            # auto-created at confirmation).
+            # NB: on account.move.line display_type is 'product' for normal
+            # lines (truthy!) — only sections/notes must be skipped.
+            for il in invoice.invoice_line_ids:
+                if not il.product_id or il.display_type in ('line_section', 'line_note'):
+                    continue
+                target = delivered_by_pid.get(il.product_id.id)
+                if target is not None and abs(il.quantity - target) > 0.001:
+                    il.write({'quantity': target})
+            # VERIFY the alignment stuck — never post an invoice that still
+            # bills undelivered quantities.
+            invoice.invalidate_recordset()
+            wrong = [
+                (il.product_id.default_code or il.product_id.display_name,
+                 il.quantity, delivered_by_pid[il.product_id.id])
+                for il in invoice.invoice_line_ids
+                if il.product_id
+                and il.display_type not in ('line_section', 'line_note')
+                and il.product_id.id in delivered_by_pid
+                and abs(il.quantity - delivered_by_pid[il.product_id.id]) > 0.001
+            ]
+            if wrong:
+                return self._notify_partial_manual(
+                    'Could not align draft invoice %s to the delivered '
+                    'quantities (%s) — adjust and post it manually.'
+                    % (invoice.display_name,
+                       ', '.join('%s: billed %s ≠ delivered %s'
+                                 % w for w in wrong)))
+            if invoice.state == 'draft':
+                invoice.action_post()
+
+            if invoice.payment_state in ('paid', 'in_payment'):
+                continue
+            collect = self.delivered_amount or computed_value
+            amount = min(collect, invoice.amount_residual) if collect > 0 else 0.0
+            if amount <= 0:
+                continue
+            register_vals = {
+                'payment_date': fields.Date.today(),
+                'journal_id': delivery_company.journal_id.id,
+                'amount': amount,
+                'communication': 'Accurate COD (partial) - %s' % (self.code or self.name),
+            }
+            wizard_model = self.env['account.payment.register'].with_context(
+                active_model='account.move', active_ids=invoice.ids)
+            register_vals = {k: v for k, v in register_vals.items()
+                             if k in wizard_model._fields}
+            try:
+                wizard_model.create(register_vals).action_create_payments()
+            except Exception as exc:
+                _logger.warning(
+                    'Accurate: partial COD payment failed for %s: %s',
+                    invoice.name, exc)
+            payment = self.env['account.payment'].search([
+                ('journal_id', '=', delivery_company.journal_id.id),
+                ('partner_id', '=', invoice.partner_id.id),
+            ], order='id desc', limit=1)
+            self.write({'invoice_id': invoice.id,
+                        'payment_id': payment.id if payment else False})
+
+            # Money mismatch → warn accounting, never block.
+            if self.delivered_amount and abs(self.delivered_amount - computed_value) > 0.01:
+                self._chatter(
+                    '<b>⚠️ Amount check:</b> courier deliveredAmount = %.2f, '
+                    'computed delivered value = %.2f — please verify.'
+                    % (self.delivered_amount, computed_value))
+
+            if self.price_type_code == 'INCLD':
+                self._book_shipping_fee_expense()
+
+        self._accurate_finish_partial(invoice=self.invoice_id)
+
+    def _accurate_finish_partial(self, invoice=None):
+        """Set the partial state + breakdown notes (shipment & SO)."""
+        self.ensure_one()
+        self.state = 'partial'
+        breakdown = self._accurate_partial_breakdown_html()
+        inv_txt = (' Invoice <b>%s</b> covers the delivered part.'
+                   % invoice.name) if invoice else ''
+        self._chatter('📦 <b>Partially delivered.</b>%s<br/>%s' % (inv_txt, breakdown))
+        self._so_status_log(
+            en_msg='📦 Shipment <b>%s</b> was PARTIALLY delivered.%s<br/>%s'
+                   % (self.code or self.name, inv_txt, breakdown),
+            ar_msg='📦 تم تسليم الشحنة <b>%s</b> جزئيًا.<br/>%s'
+                   % (self.code or self.name, breakdown),
+        )
+
+    def _create_partial_return_picking(self, done_pickings, returned_map):
+        """Return picking for ONLY the returned quantities (per product),
+        from outgoing pickings already in Done. Mirrors
+        _create_return_for_done_pickings but with per-product quantities."""
+        self.ensure_one()
+        if not returned_map:
+            return self.env['stock.picking']
+        remaining = {p: q for p, q in returned_map.items() if q > 0}
+        created = self.env['stock.picking']
+        ReturnWizard = self.env['stock.return.picking']
+        Picking = self.env['stock.picking']
+        for src in done_pickings:
+            if not remaining:
+                break
+            existing = Picking.search([
+                ('origin', '=', 'Return of %s' % src.name),
+                ('state', '!=', 'cancel'),
+            ], limit=1)
+            if existing:
+                self.message_post(
+                    body='Return picking <b>%s</b> already exists for <b>%s</b>, '
+                         'skipping.' % (existing.name, src.name))
+                continue
+            return_lines = []
+            for m in src.move_ids:
+                if m.state != 'done' or m.product_id not in remaining:
+                    continue
+                move_qty = 0.0
+                for fname in ('quantity', 'quantity_done', 'product_uom_qty'):
+                    if fname in m._fields and getattr(m, fname, 0.0):
+                        move_qty = getattr(m, fname)
+                        break
+                qty = min(remaining[m.product_id], move_qty)
+                if qty <= 0:
+                    continue
+                return_lines.append((0, 0, {
+                    'product_id': m.product_id.id,
+                    'quantity': qty,
+                    'move_id': m.id,
+                    'uom_id': m.product_uom.id,
+                }))
+                remaining[m.product_id] -= qty
+                if remaining[m.product_id] <= 0:
+                    del remaining[m.product_id]
+            if not return_lines:
+                continue
+            try:
+                wizard = ReturnWizard.with_context(
+                    active_id=src.id, active_ids=src.ids,
+                    active_model='stock.picking',
+                ).create({'picking_id': src.id,
+                          'product_return_moves': return_lines})
+                action = (wizard.action_create_returns()
+                          if hasattr(wizard, 'action_create_returns')
+                          else wizard.create_returns())
+                new_pid = (action or {}).get('res_id') if isinstance(action, dict) else None
+                new_pick = Picking.browse(new_pid) if new_pid else Picking
+                if new_pick:
+                    for mv in new_pick.move_ids:
+                        if 'propagate_cancel' in mv._fields:
+                            try:
+                                mv.propagate_cancel = False
+                            except Exception:
+                                pass
+                    self._chatter(
+                        'Partial delivery: return picking <b>%s</b> created '
+                        'for the returned quantities — validate it when the '
+                        'goods physically arrive.' % new_pick.name)
+                    created |= new_pick
+            except Exception as exc:
+                _logger.warning(
+                    'Accurate: partial return picking failed for %s: %s',
+                    src.name, exc)
+                self._chatter(
+                    '<b>Warning:</b> could not create the partial return '
+                    'picking for <b>%s</b>: %s' % (src.name, exc))
+        return created
 
     def _validate_delivery_pickings(self):
         """When the shipment is marked delivered, auto-validate ONLY the
@@ -1831,7 +2431,8 @@ class AccurateShipment(models.Model):
         }
 
     def action_reset_to_draft(self):
-        self.write({'state': 'draft', 'error_message': False})
+        self.write({'state': 'draft', 'error_message': False,
+                    'partial_notified': False})
 
     def action_unlink_test_invoice(self):
         """TEST ONLY: clear invoice_id + payment_id links so the shipment can

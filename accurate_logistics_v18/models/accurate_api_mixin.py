@@ -427,6 +427,18 @@ class AccurateApiMixin(models.AbstractModel):
                     senderZone    { id name }
                     senderSubzone { id name }
                     lastDeliveryAgent { id name phone mobile }
+                    deliveredAmount
+                    returnedValue
+                    unpacked
+                    returnStatus { code name }
+                    shipmentProducts {
+                        id
+                        product { id code name }
+                        price
+                        quantity
+                        delivered
+                        returned
+                    }
                 }
             }
         """
@@ -437,6 +449,42 @@ class AccurateApiMixin(models.AbstractModel):
             variables['code'] = code
         data = self._al_request(query, variables)
         return data.get('shipment') or {}
+
+    # ── Product catalog (shared-SKU partial-delivery support) ────────────────
+    # Accurate's product list is the courier-side catalog; Product.code is the
+    # join key and must equal the Odoo product's Internal Reference.
+
+    def _al_find_product_by_code(self, code):
+        """Look up ONE catalog product by its exact code (= Odoo default_code).
+        Returns the product dict ({id, code, name, price, weight, active}) or
+        {} when not found."""
+        if not code:
+            return {}
+        query = """
+            query FindProduct($input: ListProductsFilterInput, $first: Int!) {
+                listProducts(input: $input, first: $first) {
+                    data { id code name price weight active }
+                }
+            }
+        """
+        data = self._al_request(query, {'input': {'code': code}, 'first': 10})
+        rows = ((data.get('listProducts') or {}).get('data')) or []
+        for row in rows:
+            if (row.get('code') or '').strip() == code.strip():
+                return row
+        return {}
+
+    def _al_save_product(self, product_input):
+        """Create/update ONE catalog product (upsert by id when given).
+        product_input matches ProductInput: {id?, code, name, price, weight?,
+        active?}. Returns the saved product dict."""
+        mutation = """
+            mutation SaveProduct($input: ProductInput!) {
+                saveProduct(input: $input) { id code name price weight active }
+            }
+        """
+        data = self._al_request(mutation, {'input': product_input})
+        return data.get('saveProduct') or {}
 
     def _al_list_shipments(self, first=20, page=1, filter_input=None):
         query = """

@@ -494,6 +494,29 @@ class SaleOrder(models.Model):
         # back to the Delivery Company's default service.
         if self.accurate_service_id:
             shipment_vals['service_id'] = self.accurate_service_id.id
+
+        # Product lines — the shared-SKU identity that lets Accurate report a
+        # PARTIAL delivery per product. One line per SO product line (delivery
+        # fees / sections / notes excluded); SKU = Internal Reference.
+        product_lines = []
+        for line in self.order_line:
+            if line.display_type or not line.product_id:
+                continue
+            if 'is_delivery' in line._fields and line.is_delivery:
+                continue
+            if line.product_id.type == 'service':
+                continue
+            sku = line.product_id.default_code
+            product_lines.append((0, 0, {
+                'product_id': line.product_id.id,
+                'name': ('[%s] %s' % (sku, line.product_id.name)
+                         if sku else line.product_id.name),
+                'quantity': line.product_uom_qty,
+                'price': line.price_unit,
+            }))
+        if product_lines:
+            shipment_vals['product_ids'] = product_lines
+
         shipment = self.env['accurate.shipment'].create(shipment_vals)
 
         # Back-link to the picking so the View-Shipment button shows up there.

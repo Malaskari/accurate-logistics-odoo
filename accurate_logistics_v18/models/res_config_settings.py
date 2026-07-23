@@ -17,6 +17,19 @@ class ResConfigSettings(models.TransientModel):
             'to create the shipment.'
         ),
     )
+    accurate_auto_partial = fields.Boolean(
+        string='Auto-process partial deliveries',
+        config_parameter='accurate_logistics.auto_process_partials',
+        default=True,
+        help=(
+            'When the courier reports a PARTIAL delivery (some products '
+            'delivered, some returned), automatically validate the delivered '
+            'quantities, create the return picking, invoice only the '
+            'delivered part and register the COD payment. When data does not '
+            'match (unknown SKU, quantity conflict, already invoiced) the '
+            'system never guesses — it notifies staff to process manually.'
+        ),
+    )
 
     # ── Webhook ───────────────────────────────────────────────────────────────
 

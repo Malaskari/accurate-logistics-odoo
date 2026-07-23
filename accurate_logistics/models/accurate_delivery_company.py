@@ -172,7 +172,7 @@ class AccurateDeliveryCompany(models.Model):
     def _get_sync_cron(self):
         """The shared status-sync ir.cron record (or empty)."""
         return self.env.ref(
-            'accurate_logistics.cron_accurate_sync_statuses',
+            'accurate_logistics_v18.cron_accurate_sync_statuses',
             raise_if_not_found=False,
         )
 
@@ -296,6 +296,61 @@ class AccurateDeliveryCompany(models.Model):
         for rec in self:
             rec.shipment_count = len(rec.shipment_ids)
             rec.pending_count = len(rec.shipment_ids.filtered(lambda s: s.state == 'sent'))
+
+    # ── Product catalog push (shared-SKU partial-delivery support) ────────────
+
+    def action_push_products_to_accurate(self):
+        """Push every saleable Odoo product that has an Internal Reference to
+        Accurate's product list (create or update, matched by code = SKU).
+        This keeps the two catalogs aligned so partial deliveries reconcile
+        per product."""
+        self.ensure_one()
+        products = self.env['product.product'].search([
+            ('default_code', '!=', False),
+            ('sale_ok', '=', True),
+        ])
+        created = updated = failed = 0
+        errors = []
+        for product in products:
+            vals = {
+                'code': product.default_code,
+                'name': product.name,
+                'price': product.lst_price or 0.0,
+                'active': True,
+            }
+            if product.weight:
+                vals['weight'] = product.weight
+            try:
+                existing = self._al_find_product_by_code(product.default_code)
+                if existing.get('id'):
+                    vals['id'] = existing['id']
+                self._al_save_product(vals)
+                if existing.get('id'):
+                    updated += 1
+                else:
+                    created += 1
+            except Exception as exc:
+                failed += 1
+                if len(errors) < 5:
+                    errors.append('%s: %s' % (product.default_code, exc))
+                _logger.warning(
+                    'Accurate: product push failed for %s: %s',
+                    product.default_code, exc)
+        msg = ('Pushed %d products to %s — %d created, %d updated, %d failed.'
+               % (len(products), self.name, created, updated, failed))
+        if errors:
+            msg += '\nFirst errors:\n' + '\n'.join(errors)
+        self.message_post(body=msg.replace('\n', '<br/>'))
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': 'Product Push',
+                'message': msg,
+                'type': 'warning' if failed else 'success',
+                'sticky': bool(failed),
+            },
+        }
 
     # ── API connection test ───────────────────────────────────────────────────
 
@@ -960,6 +1015,8 @@ class AccurateDeliveryCompany(models.Model):
     # a substring check on the name, plus built-in Arabic/English keyword
     # fallbacks so the common statuses work out of the box.
 
+    # Built-in keyword fallbacks (substring, case-insensitive). Cover the
+    # common Arabic + English status wordings each family uses.
     _AL_DELIVERED_KEYWORDS = ('تم التسليم', 'تسليم تام', 'سلمت', 'تسلیم',
                               'DELIVER', 'DTR')
     _AL_RETURNED_KEYWORDS = ('ارتجاع', 'إرجاع', 'مرتجع', 'راجع', 'مرتد',
@@ -986,6 +1043,7 @@ class AccurateDeliveryCompany(models.Model):
                 return True
             if name_u and tok_u in name_u:
                 return True
+        # Built-in keyword fallback (always on, independent of config).
         for kw in keywords:
             if name_u and kw.upper() in name_u:
                 return True
