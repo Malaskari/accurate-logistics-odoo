@@ -308,6 +308,7 @@ class AccurateDeliveryCompany(models.Model):
         products = self.env['product.product'].search([
             ('default_code', '!=', False),
             ('sale_ok', '=', True),
+            ('type', '!=', 'service'),
         ])
         created = updated = failed = 0
         errors = []
@@ -317,9 +318,10 @@ class AccurateDeliveryCompany(models.Model):
                 'name': product.name,
                 'price': product.lst_price or 0.0,
                 'active': True,
+                # weight is REQUIRED (Float!) by the API — same 0.5 kg default
+                # as the shipment dispatch uses when Odoo has no weight.
+                'weight': product.weight or 0.5,
             }
-            if product.weight:
-                vals['weight'] = product.weight
             try:
                 existing = self._al_find_product_by_code(product.default_code)
                 if existing.get('id'):
