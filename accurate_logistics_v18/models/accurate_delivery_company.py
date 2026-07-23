@@ -154,6 +154,17 @@ class AccurateDeliveryCompany(models.Model):
              "shipments (sent / delivered) and fires the delivered / "
              "returned / cancelled flows. Turn off to exclude this company.",
     )
+    use_product_storage = fields.Boolean(
+        'Product Storage (Itemized Shipments)',
+        default=True,
+        help="ON: your stock is deposited in this courier's warehouse — "
+             "shipments are sent with product lines (matched by SKU), and "
+             "partial deliveries reconcile automatically per product.\n"
+             "OFF: you hand over per-order packages — shipments are sent "
+             "without product lines (no catalog lookups, no itemized "
+             "attempt); a partial delivery is handled with a staff "
+             "notification instead of auto-processing.",
+    )
     cron_active = fields.Boolean(
         'Auto-Sync Scheduler Running',
         compute='_compute_cron_settings',

@@ -188,6 +188,7 @@
           <group string="Automatic Status Sync (Cron)">
             <group>
               <field name="cron_sync_enabled"/>
+              <field name="use_product_storage"/>
             </group>
             <group>
               <field name="cron_active"/>

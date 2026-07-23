@@ -325,6 +325,10 @@ class AccurateShipment(models.Model):
         if not self.product_ids:
             return []
         company = self.delivery_company_id
+        # Companies without Product Storage get plain shipments: no catalog
+        # lookups, no itemized attempt, no warnings — silently skip.
+        if company and not company.use_product_storage:
+            return []
         problems = []
         payload = []
         for line in self.product_ids:
