@@ -1251,11 +1251,12 @@ class AccurateShipment(models.Model):
         """
         self.ensure_one()
 
-        # Idempotency.
+        # Idempotency. NB: partial_notified does NOT block re-processing — a
+        # re-sync after staff fixed the blocking cause should process the
+        # shipment; only the duplicate NOTIFICATION is suppressed (inside
+        # _notify_partial_manual).
         if self.state == 'partial' and self.invoice_id:
             return
-        if self.partial_notified and not self.invoice_id:
-            return  # staff already notified; they process manually.
 
         # Setting gate (default ON).
         auto = self.env['ir.config_parameter'].sudo().get_param(
@@ -1321,12 +1322,12 @@ class AccurateShipment(models.Model):
                         for l in lines if l.returned_qty > 0}
 
         # Kit/BoM guard: a partially-returned product must exist as REAL moves
-        # on the outgoing picking. Kit parents explode into component moves, so
+        # on the outgoing picking (ANY state — a re-run after the first pass
+        # may have cancelled the returned product's move already). Kit parents
+        # never get their own move (they explode into components), so
         # per-product reconciliation of a returned kit is ambiguous → manual.
         for product in returned_map:
-            if not outgoing.move_ids.filtered(
-                lambda m: m.product_id == product and m.state != 'cancel'
-            ):
+            if not outgoing.move_ids.filtered(lambda m: m.product_id == product):
                 return self._notify_partial_manual(
                     'Returned product %s has no matching stock move on the '
                     'outgoing delivery (kit/BoM product?) — reconcile manually.'
@@ -1401,15 +1402,19 @@ class AccurateShipment(models.Model):
             self._accurate_finish_partial(invoice=None)
             return
 
-        invoices = self.env['account.move']
-        try:
-            if sale.invoice_status in ('to invoice', 'no'):
+        # Existing DRAFTS first (this DB auto-invoices at confirmation, and
+        # with mixed invoice policies the draft may already cover exactly the
+        # delivered part — invoice_status is then 'no' and _create_invoices
+        # would raise "nothing to invoice"). Only create when there are no
+        # drafts AND something is genuinely left to invoice.
+        invoices = sale.invoice_ids.filtered(
+            lambda i: i.state == 'draft' and i.move_type == 'out_invoice')
+        if not invoices and sale.invoice_status == 'to invoice':
+            try:
                 invoices = sale._create_invoices()
-            elif sale.invoice_ids.filtered(lambda i: i.state == 'draft'):
-                invoices = sale.invoice_ids.filtered(lambda i: i.state == 'draft')
-        except Exception as exc:
-            return self._notify_partial_manual(
-                'Could not create the invoice for the delivered part: %s' % exc)
+            except Exception as exc:
+                return self._notify_partial_manual(
+                    'Could not create the invoice for the delivered part: %s' % exc)
         if not invoices:
             return self._notify_partial_manual(
                 'Nothing invoiceable found for the delivered part.')
@@ -1494,7 +1499,7 @@ class AccurateShipment(models.Model):
     def _accurate_finish_partial(self, invoice=None):
         """Set the partial state + breakdown notes (shipment & SO)."""
         self.ensure_one()
-        self.state = 'partial'
+        self.write({'state': 'partial', 'partial_notified': False})
         breakdown = self._accurate_partial_breakdown_html()
         inv_txt = (' Invoice <b>%s</b> covers the delivered part.'
                    % invoice.name) if invoice else ''
