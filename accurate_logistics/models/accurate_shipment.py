@@ -454,6 +454,15 @@ class AccurateShipment(models.Model):
         product_lines = self._al_resolve_product_lines()
         if product_lines:
             inp['shipmentProducts'] = product_lines
+            # Itemized shipments: the API derives the weight, pieces count and
+            # package value from the product lines and FORBIDS sending them
+            # explicitly (حقل محظور).
+            for forbidden in ('weight', 'piecesCount', 'price'):
+                inp.pop(forbidden, None)
+            if inp.get('id'):
+                # Update shape: `code` is forbidden and `date` becomes required.
+                inp.pop('code', None)
+                inp['date'] = fields.Datetime.to_string(self.date or fields.Datetime.now())
 
         if not self.delivery_company_id:
             raise UserError('No Delivery Company selected. Cannot send to API.')
