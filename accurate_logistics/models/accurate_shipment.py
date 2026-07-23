@@ -1399,6 +1399,17 @@ class AccurateShipment(models.Model):
                     return self._notify_partial_manual(
                         'Could not validate picking %s with the delivered '
                         'quantities: %s' % (pick.name, exc))
+            # Multi-step warehouses: the internal receipt already moved the
+            # FULL quantity into the courier staging location, so the returned
+            # part is stranded there. Create a return picking (courier staging
+            # → storage) for the returned quantities and leave it UNVALIDATED —
+            # staff validate it only when the goods physically come back from
+            # the courier.
+            internal_done = pickings.filtered(
+                lambda p: p.picking_type_code != 'outgoing'
+                and p.state == 'done')
+            if returned_map and internal_done:
+                self._create_partial_return_picking(internal_done, returned_map)
 
         # ── 2+3. Invoice delivered part + COD payment ─────────────────────
         delivery_company = self.delivery_company_id
