@@ -1,6 +1,6 @@
 {
     'name': 'Accurate Logistics Integration',
-    'version': '19.0.1.0.0',
+    'version': '19.0.1.1.0',
     'category': 'Inventory/Delivery',
     'summary': 'Accurate Logistics API — shipments, COD invoicing, webhook status sync',
     'description': """

@@ -15,7 +15,7 @@ class SaleOrder(models.Model):
         'accurate.zone',
         string='Recipient Zone',
         # No company selected → empty list. With company → only its zones.
-        domain="[('is_subzone', '=', False), ('delivery_company_ids', 'in', [accurate_delivery_company_id])] if accurate_delivery_company_id else [('id', '=', 0)]",
+        domain="[('is_subzone', '=', False), ('company_id', '=', accurate_delivery_company_id)] if accurate_delivery_company_id else [('id', '=', 0)]",
         tracking=True,
         help='Pick a Delivery Company first — this dropdown then shows only that company’s zones.',
     )
@@ -65,7 +65,7 @@ class SaleOrder(models.Model):
             # Clear stale picks belonging to a different company
             if order.accurate_service_id and order.accurate_service_id.company_id != company:
                 order.accurate_service_id = False
-            if order.accurate_recipient_zone_id and company not in order.accurate_recipient_zone_id.delivery_company_ids:
+            if order.accurate_recipient_zone_id and order.accurate_recipient_zone_id.company_id != company:
                 order.accurate_recipient_zone_id = False
                 order.accurate_recipient_subzone_id = False
             # Auto-fill default service if company has one

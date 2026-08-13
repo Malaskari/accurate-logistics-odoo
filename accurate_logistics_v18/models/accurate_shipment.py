@@ -111,7 +111,7 @@ class AccurateShipment(models.Model):
     recipient_address = fields.Char('Recipient Address', required=True, tracking=True)
     recipient_zone_id = fields.Many2one(
         'accurate.zone', string='Recipient Zone', required=True,
-        domain="[('is_subzone', '=', False), ('delivery_company_ids', 'in', [delivery_company_id])] if delivery_company_id else [('id', '=', 0)]",
+        domain="[('is_subzone', '=', False), ('company_id', '=', delivery_company_id)] if delivery_company_id else [('id', '=', 0)]",
         tracking=True,
     )
     recipient_subzone_id = fields.Many2one(
@@ -131,7 +131,7 @@ class AccurateShipment(models.Model):
     sender_postal_code = fields.Char('Sender Postal Code')
     sender_zone_id = fields.Many2one(
         'accurate.zone', string='Sender Zone',
-        domain="[('is_subzone', '=', False), ('delivery_company_ids', 'in', [delivery_company_id])] if delivery_company_id else [('id', '=', 0)]",
+        domain="[('is_subzone', '=', False), ('company_id', '=', delivery_company_id)] if delivery_company_id else [('id', '=', 0)]",
     )
     sender_subzone_id = fields.Many2one(
         'accurate.zone', string='Sender Sub-zone',
@@ -151,10 +151,10 @@ class AccurateShipment(models.Model):
             company = s.delivery_company_id
             if s.service_id and s.service_id.company_id != company:
                 s.service_id = False
-            if s.recipient_zone_id and company not in s.recipient_zone_id.delivery_company_ids:
+            if s.recipient_zone_id and s.recipient_zone_id.company_id != company:
                 s.recipient_zone_id = False
                 s.recipient_subzone_id = False
-            if s.sender_zone_id and company not in s.sender_zone_id.delivery_company_ids:
+            if s.sender_zone_id and s.sender_zone_id.company_id != company:
                 s.sender_zone_id = False
                 s.sender_subzone_id = False
             if company and company.default_service_id and not s.service_id:

@@ -18,7 +18,7 @@ class AccurateCalculateFeesWizard(models.TransientModel):
 
     recipient_zone_id = fields.Many2one(
         'accurate.zone', string='Recipient Zone', required=True,
-        domain="[('is_subzone', '=', False), ('delivery_company_ids', 'in', [delivery_company_id])] if delivery_company_id else [('id', '=', 0)]",
+        domain="[('is_subzone', '=', False), ('company_id', '=', delivery_company_id)] if delivery_company_id else [('id', '=', 0)]",
     )
     recipient_subzone_id = fields.Many2one(
         'accurate.zone', string='Recipient Sub-zone', required=True,
@@ -35,7 +35,7 @@ class AccurateCalculateFeesWizard(models.TransientModel):
             company = w.delivery_company_id
             if w.service_id and w.service_id.company_id != company:
                 w.service_id = False
-            if w.recipient_zone_id and company not in w.recipient_zone_id.delivery_company_ids:
+            if w.recipient_zone_id and w.recipient_zone_id.company_id != company:
                 w.recipient_zone_id = False
                 w.recipient_subzone_id = False
             if company and company.default_service_id and not w.service_id:

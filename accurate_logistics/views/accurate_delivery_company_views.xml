@@ -45,7 +45,7 @@
                   string="Clear Zones"
                   type="object"
                   class="btn-secondary"
-                  confirm="This will unlink all zones from this company (zones are not deleted). Continue?"
+                  confirm="This DELETES this company's zones and sub-zones. Other delivery companies keep their own zones. Zones already used by a shipment are protected. Continue?"
                   invisible="zone_count == 0"/>
           <button name="action_sync_cancellation_reasons"
                   string="Sync Cancellation Reasons"

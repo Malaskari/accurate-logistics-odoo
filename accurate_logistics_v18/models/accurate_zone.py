@@ -33,12 +33,18 @@ class AccurateZone(models.Model):
     child_ids = fields.One2many('accurate.zone', 'parent_id', string='Sub-zones')
     child_count = fields.Integer('Sub-zone Count', compute='_compute_child_count')
 
-    # ── Link to delivery companies ────────────────────────────────────────────
-    delivery_company_ids = fields.Many2many(
+    # ── Owning delivery company ───────────────────────────────────────────────
+    # Each delivery company keeps its OWN zone catalog: couriers (and even
+    # separate tenants of the same courier) have independent id-spaces, so
+    # zone api_id 1 means a different city for each of them. Sharing one row
+    # between companies would rename/re-parent one company's zones when
+    # another syncs.
+    company_id = fields.Many2one(
         'accurate.delivery.company',
-        'accurate_company_zone_rel',
-        'zone_id', 'company_id',
-        string='Delivery Companies',
+        string='Delivery Company',
+        required=True,
+        ondelete='cascade',
+        index=True,
     )
 
     # ── Link to shipping services ─────────────────────────────────────────────
@@ -56,20 +62,24 @@ class AccurateZone(models.Model):
              'Logistics, the available zones differ per service price list.',
     )
 
-    @api.constrains('api_id', 'is_subzone')
+    @api.constrains('api_id', 'is_subzone', 'company_id')
     def _check_api_id_unique(self):
+        """API ids are unique WITHIN a delivery company only — two companies
+        legitimately use the same id for different zones."""
         for rec in self:
             if not rec.api_id:
                 continue
             duplicate = self.search([
                 ('api_id', '=', rec.api_id),
                 ('is_subzone', '=', rec.is_subzone),
+                ('company_id', '=', rec.company_id.id),
                 ('id', '!=', rec.id),
             ], limit=1)
             if duplicate:
                 raise ValidationError(
-                    'A %s with API ID %d already exists: %s'
-                    % ('sub-zone' if rec.is_subzone else 'zone', rec.api_id, duplicate.name)
+                    'A %s with API ID %d already exists for %s: %s'
+                    % ('sub-zone' if rec.is_subzone else 'zone', rec.api_id,
+                       rec.company_id.name or '?', duplicate.name)
                 )
 
     @api.constrains('is_subzone', 'parent_id')
@@ -82,49 +92,9 @@ class AccurateZone(models.Model):
                     % (rec.name or '', rec.name or '')
                 )
 
-    # ── Sync subzone ↔ company.subzone_ids relation ──────────────────────────
-    # accurate.delivery.company has TWO M2M tables to accurate.zone:
-    #   - zone_ids   → parent zones   (table accurate_company_zone_rel)
-    #   - subzone_ids → sub-zones      (table accurate_company_subzone_rel)
-    # The user-facing field on accurate.zone (`delivery_company_ids`) only
-    # writes to the FIRST table. When a sub-zone is linked to a company we
-    # must also mirror that link into the company's subzone_ids so the
-    # shipment/wizard dropdowns find it.
-
-    def _sync_subzone_link(self, companies):
-        """Ensure each company has this sub-zone in its subzone_ids, and
-        remove from any company that's no longer selected.
-        """
-        for rec in self:
-            if not rec.is_subzone:
-                continue
-            # Add to currently linked companies
-            for company in companies:
-                company.write({'subzone_ids': [(4, rec.id)]})
-            # Remove from companies that previously had this sub-zone
-            # but are no longer in delivery_company_ids
-            stale = self.env['accurate.delivery.company'].search([
-                ('subzone_ids', 'in', rec.id),
-                ('id', 'not in', companies.ids),
-            ])
-            for company in stale:
-                company.write({'subzone_ids': [(3, rec.id)]})
-
-    @api.model_create_multi
-    def create(self, vals_list):
-        records = super().create(vals_list)
-        for rec in records:
-            if rec.is_subzone and rec.delivery_company_ids:
-                rec._sync_subzone_link(rec.delivery_company_ids)
-        return records
-
-    def write(self, vals):
-        res = super().write(vals)
-        if 'delivery_company_ids' in vals or 'is_subzone' in vals:
-            for rec in self:
-                if rec.is_subzone:
-                    rec._sync_subzone_link(rec.delivery_company_ids)
-        return res
+    # The company's zone_ids / subzone_ids are One2many views over company_id,
+    # so there is no link table left to keep in sync — a zone simply belongs to
+    # the delivery company that synced it.
 
     @api.depends('child_ids')
     def _compute_child_count(self):
@@ -157,14 +127,12 @@ class AccurateZone(models.Model):
         if not self.api_id:
             raise UserError('This zone has no API ID. Sync zones from the API first.')
 
-        # Pick a delivery company that has API credentials
-        company = self.delivery_company_ids.filtered(
-            lambda c: c.api_username and c.api_password
-        )[:1]
-        if not company:
+        # The owning delivery company provides the API credentials.
+        company = self.company_id
+        if not (company and company.api_username and company.api_password):
             raise UserError(
-                'This zone is not linked to any Delivery Company with API credentials.\n'
-                'Link this zone to a Delivery Company that has its API configured.'
+                'This zone\'s Delivery Company has no API credentials.\n'
+                'Configure the API on %s first.' % (company.name or 'the delivery company')
             )
 
         try:
@@ -190,14 +158,17 @@ class AccurateZone(models.Model):
             z_name = z.get('name', '')
             if not z_id:
                 continue
-            existing = self.search(
-                [('api_id', '=', z_id), ('is_subzone', '=', True)], limit=1
-            )
+            existing = self.search([
+                ('api_id', '=', z_id),
+                ('is_subzone', '=', True),
+                ('company_id', '=', company.id),
+            ], limit=1)
             vals = {
                 'api_id': z_id,
                 'name': z_name,
                 'is_subzone': True,
                 'parent_id': self.id,
+                'company_id': company.id,
             }
             if existing:
                 existing.write(vals)
@@ -205,10 +176,6 @@ class AccurateZone(models.Model):
             else:
                 rec = self.create(vals)
                 synced_ids.append(rec.id)
-
-        # Link the new sub-zones to the same company that owns the parent
-        if synced_ids:
-            company.write({'subzone_ids': [(4, sid) for sid in synced_ids]})
 
         return {
             'type': 'ir.actions.client',
@@ -224,51 +191,60 @@ class AccurateZone(models.Model):
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _upsert_zones(self, zones, is_subzone=False, company=None):
-        """Create-or-update zone records; optionally link to a company."""
+        """Create-or-update the zone records OWNED BY *company*.
+
+        Scoped by company: every delivery company keeps its own catalog, so an
+        api_id already used by another company is never touched."""
+        if not company:
+            raise ValueError('A delivery company is required to sync zones.')
         count = 0
-        created_ids = []
         for z in zones:
             z_id = z.get('id')
             z_name = z.get('name', '')
             if not z_id:
                 continue
-            existing = self.search(
-                [('api_id', '=', z_id), ('is_subzone', '=', is_subzone)], limit=1
-            )
-            vals = {'api_id': z_id, 'name': z_name, 'is_subzone': is_subzone}
+            existing = self.search([
+                ('api_id', '=', z_id),
+                ('is_subzone', '=', is_subzone),
+                ('company_id', '=', company.id),
+            ], limit=1)
+            vals = {
+                'api_id': z_id, 'name': z_name, 'is_subzone': is_subzone,
+                'company_id': company.id,
+            }
             if existing:
                 existing.write(vals)
-                created_ids.append(existing.id)
             else:
-                rec = self.create(vals)
-                created_ids.append(rec.id)
+                self.create(vals)
             count += 1
-        if company and created_ids:
-            company.write({'zone_ids': [(4, zid) for zid in created_ids]})
         return count
 
     def _upsert_subzones(self, subzones, parent, company=None):
-        """Create-or-update sub-zone records under *parent*."""
+        """Create-or-update sub-zone records under *parent*, owned by the same
+        company as the parent zone."""
+        company = company or parent.company_id
+        if not company:
+            raise ValueError('A delivery company is required to sync sub-zones.')
         count = 0
-        created_ids = []
         for z in subzones:
             z_id = z.get('id')
             z_name = z.get('name', '')
             if not z_id:
                 continue
-            existing = self.search(
-                [('api_id', '=', z_id), ('is_subzone', '=', True)], limit=1
-            )
-            vals = {'api_id': z_id, 'name': z_name, 'is_subzone': True, 'parent_id': parent.id}
+            existing = self.search([
+                ('api_id', '=', z_id),
+                ('is_subzone', '=', True),
+                ('company_id', '=', company.id),
+            ], limit=1)
+            vals = {
+                'api_id': z_id, 'name': z_name, 'is_subzone': True,
+                'parent_id': parent.id, 'company_id': company.id,
+            }
             if existing:
                 existing.write(vals)
-                created_ids.append(existing.id)
             else:
-                rec = self.create(vals)
-                created_ids.append(rec.id)
+                self.create(vals)
             count += 1
-        if company and created_ids:
-            company.write({'subzone_ids': [(4, zid) for zid in created_ids]})
         return count
 
     @staticmethod

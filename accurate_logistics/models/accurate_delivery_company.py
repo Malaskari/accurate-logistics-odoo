@@ -271,17 +271,15 @@ class AccurateDeliveryCompany(models.Model):
 
     # ── Zones linked to this company ──────────────────────────────────────────
 
-    zone_ids = fields.Many2many(
-        'accurate.zone',
-        'accurate_company_zone_rel',
-        'company_id', 'zone_id',
+    # Each company owns its zones (accurate.zone.company_id), so these are
+    # plain One2many views — no link tables, nothing shared between companies.
+    zone_ids = fields.One2many(
+        'accurate.zone', 'company_id',
         string='Zones',
         domain=[('is_subzone', '=', False)],
     )
-    subzone_ids = fields.Many2many(
-        'accurate.zone',
-        'accurate_company_subzone_rel',
-        'company_id', 'zone_id',
+    subzone_ids = fields.One2many(
+        'accurate.zone', 'company_id',
         string='Sub-zones',
         domain=[('is_subzone', '=', True)],
     )
@@ -520,33 +518,28 @@ class AccurateDeliveryCompany(models.Model):
             except Exception:
                 subzones = []
 
-            batch_ids = []
             for z in subzones:
                 z_id = z.get('id')
                 z_name = z.get('name', '')
                 if not z_id:
                     continue
-                existing = Zone.search(
-                    [('api_id', '=', z_id), ('is_subzone', '=', True)], limit=1
-                )
+                existing = Zone.search([
+                    ('api_id', '=', z_id),
+                    ('is_subzone', '=', True),
+                    ('company_id', '=', company_id),
+                ], limit=1)
                 vals = {
                     'api_id': z_id,
                     'name': z_name,
                     'is_subzone': True,
                     'parent_id': parent.id,
+                    'company_id': company_id,
                 }
                 if existing:
                     existing.write(vals)
-                    batch_ids.append(existing.id)
                 else:
-                    rec = Zone.create(vals)
-                    batch_ids.append(rec.id)
+                    Zone.create(vals)
                 synced += 1
-
-            if batch_ids:
-                self.browse(company_id).write(
-                    {'subzone_ids': [(4, sid) for sid in batch_ids]}
-                )
 
             # Save progress every BATCH parents — survives disconnects.
             if idx % BATCH == 0:
@@ -675,31 +668,28 @@ class AccurateDeliveryCompany(models.Model):
                 parent_odoo_id, subs = future.result()
                 processed += 1
 
-                batch_ids = []
                 for z in subs:
                     z_id = z.get('id')
                     z_name = z.get('name', '')
                     if not z_id:
                         continue
-                    existing = Zone.search(
-                        [('api_id', '=', z_id), ('is_subzone', '=', True)], limit=1
-                    )
+                    existing = Zone.search([
+                        ('api_id', '=', z_id),
+                        ('is_subzone', '=', True),
+                        ('company_id', '=', self.id),
+                    ], limit=1)
                     vals = {
                         'api_id': z_id,
                         'name': z_name,
                         'is_subzone': True,
                         'parent_id': parent_odoo_id,
+                        'company_id': self.id,
                     }
                     if existing:
                         existing.write(vals)
-                        batch_ids.append(existing.id)
                     else:
-                        rec = Zone.create(vals)
-                        batch_ids.append(rec.id)
+                        Zone.create(vals)
                     subzone_count += 1
-
-                if batch_ids:
-                    self.write({'subzone_ids': [(4, sid) for sid in batch_ids]})
 
                 if processed % REPORT_EVERY == 0 or processed == total:
                     # Check cancel flag — re-read fresh from DB
@@ -744,9 +734,28 @@ class AccurateDeliveryCompany(models.Model):
         self.env.cr.commit()
 
     def action_clear_zones(self):
-        """Remove all zone/subzone links from this company (does not delete zones)."""
+        """Delete THIS company's zones and sub-zones.
+
+        Zones belong to exactly one delivery company, so clearing them removes
+        the records themselves — no other company is affected. Sub-zones go
+        with their parents (ondelete cascade); we unlink both explicitly so
+        stray sub-zones without a parent are cleared too.
+        """
         self.ensure_one()
-        self.write({'zone_ids': [(5,)], 'subzone_ids': [(5,)]})
+        zones = self.env['accurate.zone'].search([('company_id', '=', self.id)])
+        blocked = zones.filtered(
+            lambda z: self.env['accurate.shipment'].sudo().search_count([
+                '|', ('recipient_zone_id', '=', z.id),
+                ('recipient_subzone_id', '=', z.id),
+            ])
+        )
+        if blocked:
+            raise UserError(
+                'Cannot clear zones: %d of them are still used by shipments '
+                '(e.g. %s). Re-sync instead of clearing.'
+                % (len(blocked), ', '.join(blocked[:3].mapped('name')))
+            )
+        zones.unlink()
 
     def action_force_reset_sync(self):
         """Clear sync_in_progress / sync_cancel_requested without waiting for

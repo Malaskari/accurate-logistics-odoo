@@ -14,7 +14,7 @@ class StockPicking(models.Model):
     accurate_recipient_zone_id = fields.Many2one(
         'accurate.zone',
         string='Recipient Zone',
-        domain="[('is_subzone', '=', False), ('delivery_company_ids', 'in', [accurate_delivery_company_id])] if accurate_delivery_company_id else [('id', '=', 0)]",
+        domain="[('is_subzone', '=', False), ('company_id', '=', accurate_delivery_company_id)] if accurate_delivery_company_id else [('id', '=', 0)]",
     )
     accurate_recipient_subzone_id = fields.Many2one(
         'accurate.zone',
@@ -37,7 +37,7 @@ class StockPicking(models.Model):
             company = p.accurate_delivery_company_id
             if p.accurate_service_id and p.accurate_service_id.company_id != company:
                 p.accurate_service_id = False
-            if p.accurate_recipient_zone_id and company not in p.accurate_recipient_zone_id.delivery_company_ids:
+            if p.accurate_recipient_zone_id and p.accurate_recipient_zone_id.company_id != company:
                 p.accurate_recipient_zone_id = False
                 p.accurate_recipient_subzone_id = False
             if company and company.default_service_id and not p.accurate_service_id:

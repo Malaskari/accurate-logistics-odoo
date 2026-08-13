@@ -7,6 +7,7 @@
     <field name="model">accurate.zone</field>
     <field name="arch" type="xml">
       <list string="Zones">
+        <field name="company_id"/>
         <field name="name"/>
         <field name="is_subzone"/>
         <field name="parent_id"/>
@@ -41,6 +42,9 @@
           </div>
           <group>
             <group>
+              <field name="company_id"
+                     options="{'no_create': True}"
+                     help="The delivery company this zone belongs to. Each company keeps its own zone catalog — syncing one company never affects another."/>
               <field name="name"/>
               <field name="is_subzone"/>
               <field name="api_id"
@@ -51,15 +55,9 @@
               <field name="parent_id"
                      invisible="not is_subzone"
                      required="is_subzone"
+                     domain="[('is_subzone', '=', False), ('company_id', '=', company_id)]"
                      options="{'no_create': True}"/>
             </group>
-          </group>
-          <group string="Delivery Companies"
-                 help="Pick the delivery companies this zone belongs to. The zone will appear in the recipient zone / sub-zone dropdowns on shipments + sale orders + pickings for those companies.">
-            <field name="delivery_company_ids"
-                   widget="many2many_tags"
-                   nolabel="1"
-                   options="{'no_create': True}"/>
           </group>
           <group string="Shipping Services"
                  help="In Accurate Logistics, available zones differ per service price list. Link this zone to the specific shipping services that include it.">
@@ -67,10 +65,32 @@
                    widget="many2many_tags"
                    nolabel="1"
                    options="{'no_create': True}"
-                   domain="[('company_id', 'in', delivery_company_ids)]"/>
+                   domain="[('company_id', '=', company_id)]"/>
           </group>
         </sheet>
       </form>
+    </field>
+  </record>
+
+  <!-- Search: zones are per delivery company, so filtering by company matters -->
+  <record id="accurate_zone_view_search" model="ir.ui.view">
+    <field name="name">accurate.zone.search</field>
+    <field name="model">accurate.zone</field>
+    <field name="arch" type="xml">
+      <search string="Zones">
+        <field name="name"/>
+        <field name="api_id"/>
+        <field name="company_id"/>
+        <field name="parent_id"/>
+        <filter string="In Price List" name="in_price_list"
+                domain="[('in_price_list', '=', True)]"/>
+        <group expand="0" string="Group By">
+          <filter string="Delivery Company" name="group_company"
+                  context="{'group_by': 'company_id'}"/>
+          <filter string="Parent Zone" name="group_parent"
+                  context="{'group_by': 'parent_id'}"/>
+        </group>
+      </search>
     </field>
   </record>
 
