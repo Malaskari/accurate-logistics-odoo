@@ -7,6 +7,7 @@
     <field name="arch" type="xml">
       <list string="Cancellation Reasons" editable="bottom">
         <field name="sequence" widget="handle"/>
+        <field name="company_id"/>
         <field name="api_id"/>
         <field name="code"/>
         <field name="name"/>
@@ -24,6 +25,7 @@
           <div class="oe_title"><h1><field name="name"/></h1></div>
           <group>
             <group>
+              <field name="company_id" options="{'no_create': True}"/>
               <field name="api_id" readonly="1"/>
               <field name="code"/>
               <field name="type_code"/>
@@ -36,6 +38,23 @@
           <field name="description" placeholder="Optional description…"/>
         </sheet>
       </form>
+    </field>
+  </record>
+
+  <record id="accurate_cancellation_reason_view_search" model="ir.ui.view">
+    <field name="name">accurate.cancellation.reason.search</field>
+    <field name="model">accurate.cancellation.reason</field>
+    <field name="arch" type="xml">
+      <search string="Cancellation Reasons">
+        <field name="name"/>
+        <field name="code"/>
+        <field name="api_id"/>
+        <field name="company_id"/>
+        <group expand="0" string="Group By">
+          <filter string="Delivery Company" name="group_company"
+                  context="{'group_by': 'company_id'}"/>
+        </group>
+      </search>
     </field>
   </record>
 

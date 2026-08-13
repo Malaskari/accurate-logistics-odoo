@@ -6,6 +6,7 @@
     <field name="model">accurate.service</field>
     <field name="arch" type="xml">
       <list string="Shipping Services">
+        <field name="company_id"/>
         <field name="name"/>
         <field name="api_id"/>
         <field name="active"/>
@@ -20,12 +21,29 @@
       <form string="Shipping Service">
         <sheet>
           <group>
+            <field name="company_id" options="{'no_create': True}"/>
             <field name="name"/>
             <field name="api_id"/>
             <field name="active"/>
           </group>
         </sheet>
       </form>
+    </field>
+  </record>
+
+  <record id="accurate_service_view_search" model="ir.ui.view">
+    <field name="name">accurate.service.search</field>
+    <field name="model">accurate.service</field>
+    <field name="arch" type="xml">
+      <search string="Shipping Services">
+        <field name="name"/>
+        <field name="api_id"/>
+        <field name="company_id"/>
+        <group expand="0" string="Group By">
+          <filter string="Delivery Company" name="group_company"
+                  context="{'group_by': 'company_id'}"/>
+        </group>
+      </search>
     </field>
   </record>
 

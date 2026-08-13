@@ -15,6 +15,7 @@ class AccurateService(models.Model):
     company_id = fields.Many2one(
         'accurate.delivery.company',
         string='Delivery Company',
+        required=True,
         ondelete='cascade',
         index=True,
         help='Owner Delivery Company. Each merchant account exposes its own '

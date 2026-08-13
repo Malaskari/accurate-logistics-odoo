@@ -591,9 +591,13 @@ class AccurateShipment(models.Model):
             rid = reason.get('id')
             match = False
             if rid:
-                match = self.env['accurate.cancellation.reason'].search(
-                    [('api_id', '=', rid)], limit=1,
-                )
+                # Scope to THIS shipment's company — each merchant account has
+                # its own reason list, so the same api_id means different
+                # reasons for different companies.
+                match = self.env['accurate.cancellation.reason'].search([
+                    ('api_id', '=', rid),
+                    ('company_id', '=', self.delivery_company_id.id),
+                ], limit=1)
             if match:
                 vals['cancellation_reason_id'] = match.id
             elif rname:
@@ -954,9 +958,11 @@ class AccurateShipment(models.Model):
         if not reason_id and refreshed_reason:
             reason_id = refreshed_reason.get('id')
         if reason_id:
-            reason = self.env['accurate.cancellation.reason'].search(
-                [('api_id', '=', reason_id)], limit=1,
-            )
+            # Scoped to the shipment's own company — see _apply_api_response.
+            reason = self.env['accurate.cancellation.reason'].search([
+                ('api_id', '=', reason_id),
+                ('company_id', '=', shipment.delivery_company_id.id),
+            ], limit=1)
             if reason:
                 vals['cancellation_reason_id'] = reason.id
             elif refreshed_reason and refreshed_reason.get('name'):
