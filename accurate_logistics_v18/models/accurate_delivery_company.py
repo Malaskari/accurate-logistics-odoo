@@ -154,6 +154,15 @@ class AccurateDeliveryCompany(models.Model):
              "shipments (sent / delivered) and fires the delivered / "
              "returned / cancelled flows. Turn off to exclude this company.",
     )
+    api_omit_derived_fields = fields.Boolean(
+        'API Derives Weight/Pieces/Price',
+        readonly=True, copy=False,
+        help='Learned automatically: some Accurate tenants compute the weight, '
+             'pieces count and package value from the shipment product lines '
+             'and reject them when sent explicitly, while others require them. '
+             'Set the first time this tenant rejects them, so later shipments '
+             'are sent in the right shape straight away.',
+    )
     use_product_storage = fields.Boolean(
         'Product Storage (Itemized Shipments)',
         default=True,

@@ -364,6 +364,77 @@ class AccurateShipment(models.Model):
             return []
         return payload
 
+    # Fields that some tenants derive from the product lines and REJECT when
+    # sent explicitly ("حقل محظور"), while others REQUIRE them ("حقل مطلوب").
+    _AL_DERIVED_FIELDS = ('weight', 'piecesCount', 'price')
+
+    @staticmethod
+    def _al_error_says(exc, *needles):
+        text = str(exc)
+        return any(n in text for n in needles)
+
+    def _al_send_with_fallbacks(self, inp):
+        """Send the shipment, adapting to what THIS tenant accepts.
+
+        Tenants disagree about itemized shipments: some derive weight / pieces
+        / price from the product lines and reject them as forbidden, others
+        demand them. Rather than hard-coding one behaviour, send the complete
+        payload and re-shape it only if the API objects:
+
+          1. full payload
+          2. …minus weight/piecesCount/price   (when the API called them forbidden)
+          3. …minus the product lines          (e.g. no stock in the courier's
+                                                warehouse — dispatch must not block)
+        """
+        self.ensure_one()
+        company = self.delivery_company_id
+
+        # Shape already learned for this tenant → send it straight away.
+        if inp.get('shipmentProducts') and company.api_omit_derived_fields:
+            inp = {k: v for k, v in inp.items() if k not in self._AL_DERIVED_FIELDS}
+
+        try:
+            return company._al_save_shipment(inp)
+        except Exception as exc:
+            first_error = exc
+
+        # 2. The tenant derives these from the products — drop and retry.
+        if (inp.get('shipmentProducts')
+                and not company.api_omit_derived_fields
+                and self._al_error_says(first_error, 'محظور', 'forbidden')):
+            slim = {k: v for k, v in inp.items() if k not in self._AL_DERIVED_FIELDS}
+            try:
+                result = company._al_save_shipment(slim)
+                # Remember, so this tenant's next shipment skips the retry.
+                company.sudo().api_omit_derived_fields = True
+                _logger.info(
+                    'Accurate: %s derives %s from the product lines — '
+                    'remembered for future shipments.',
+                    company.name, ', '.join(self._AL_DERIVED_FIELDS),
+                )
+                return result
+            except Exception as exc2:
+                first_error = exc2
+
+        # 3. Last resort — send without the product lines so dispatch still
+        #    happens (partial deliveries then need manual reconciliation).
+        if inp.get('shipmentProducts'):
+            plain = {k: v for k, v in inp.items() if k != 'shipmentProducts'}
+            try:
+                result = company._al_save_shipment(plain)
+                self._chatter(
+                    '<b>Sent without product lines</b> — the courier rejected '
+                    'the itemized shipment (usually: no stock of these '
+                    'products in the courier warehouse). Partial deliveries on '
+                    'this shipment will need manual reconciliation.'
+                    '<br/>API said: %s' % str(first_error)[:300])
+                return result
+            except Exception as exc3:
+                first_error = exc3
+
+        self.write({'state': 'error', 'error_message': str(first_error)})
+        raise first_error
+
     def _send_to_api(self):
         self.ensure_one()
 
@@ -458,11 +529,6 @@ class AccurateShipment(models.Model):
         product_lines = self._al_resolve_product_lines()
         if product_lines:
             inp['shipmentProducts'] = product_lines
-            # Itemized shipments: the API derives the weight, pieces count and
-            # package value from the product lines and FORBIDS sending them
-            # explicitly (حقل محظور).
-            for forbidden in ('weight', 'piecesCount', 'price'):
-                inp.pop(forbidden, None)
             if inp.get('id'):
                 # Update shape: `code` is forbidden and `date` becomes required.
                 inp.pop('code', None)
@@ -471,29 +537,7 @@ class AccurateShipment(models.Model):
         if not self.delivery_company_id:
             raise UserError('No Delivery Company selected. Cannot send to API.')
 
-        try:
-            result = self.delivery_company_id._al_save_shipment(inp)
-        except Exception as exc:
-            # Product-itemized shipments draw from stock held in the COURIER's
-            # warehouse; when it has none ("لا يوجد كمية كافية"), retry once
-            # without the product lines so dispatch itself never blocks.
-            if inp.get('shipmentProducts'):
-                inp_no_products = {k: v for k, v in inp.items()
-                                   if k != 'shipmentProducts'}
-                try:
-                    result = self.delivery_company_id._al_save_shipment(inp_no_products)
-                    self._chatter(
-                        '<b>Sent without product lines</b> — the courier '
-                        'rejected the itemized shipment (usually: no stock of '
-                        'these products in the courier warehouse). Partial '
-                        'deliveries on this shipment will need manual '
-                        'reconciliation.<br/>API said: %s' % str(exc)[:300])
-                except Exception as exc2:
-                    self.write({'state': 'error', 'error_message': str(exc2)})
-                    raise
-            else:
-                self.write({'state': 'error', 'error_message': str(exc)})
-                raise
+        result = self._al_send_with_fallbacks(inp)
 
         self._apply_api_response(result)
         self.write({'state': 'sent', 'error_message': False})
