@@ -287,31 +287,59 @@ class AccurateShipment(models.Model):
         for rec in self:
             rec._send_to_api()
 
-    @staticmethod
-    def _al_clean_phone(value):
-        """Normalise a phone number to the format Accurate's GraphQL API
-        accepts (Libya: 10 digits starting with 09).
+    # Phone shapes tenants ask for, tried in this order when one is rejected.
+    _AL_PHONE_FORMATS = ('national0', 'national', 'cc', 'e164')
+    _AL_PHONE_KEYS = ('recipientPhone', 'recipientMobile',
+                      'senderPhone', 'senderMobile')
 
-        Strips whitespace, dashes, parens, dots, and the international
-        prefixes (+218, 218, 00218). Leaves a clean national number
-        starting with 0 when possible.
+    @staticmethod
+    def _al_phone_digits(value):
+        """ASCII digits of a phone number, without any country prefix.
+
+        Converts Arabic-Indic / Eastern-Arabic numerals to ASCII first —
+        str.isdigit() accepts them, so a number typed as ٠٩١١٧٧٩٠١٤ would
+        otherwise be passed through unchanged and rejected by the API.
         """
         if not value:
-            return value
+            return ''
         s = str(value).strip()
-        if not s:
-            return s
-        # Drop every char except digits (also drops + because the API rejects it).
-        digits = ''.join(ch for ch in s if ch.isdigit())
-        # Strip Libya country code variants.
+        out = []
+        for ch in s:
+            if ch.isascii() and ch.isdigit():
+                out.append(ch)
+                continue
+            # Arabic-Indic (٠-٩) and Extended Arabic-Indic (۰-۹)
+            code = ord(ch)
+            if 0x0660 <= code <= 0x0669:
+                out.append(chr(code - 0x0660 + 0x30))
+            elif 0x06F0 <= code <= 0x06F9:
+                out.append(chr(code - 0x06F0 + 0x30))
+        digits = ''.join(out)
+        # Strip Libya country-code variants and any leading national 0.
         if digits.startswith('00218'):
             digits = digits[5:]
         elif digits.startswith('218'):
             digits = digits[3:]
-        # Ensure a leading 0 on national numbers (mobile starts with 9).
-        if digits and digits[0] != '0':
-            digits = '0' + digits
-        return digits or value
+        return digits.lstrip('0')
+
+    @classmethod
+    def _al_format_phone(cls, value, fmt='national0'):
+        """Render a phone number in the shape this tenant accepts."""
+        digits = cls._al_phone_digits(value)
+        if not digits:
+            return value or ''
+        if fmt == 'national':
+            return digits
+        if fmt == 'cc':
+            return '218' + digits
+        if fmt == 'e164':
+            return '+218' + digits
+        return '0' + digits  # 'national0' — Libyan national format
+
+    @classmethod
+    def _al_clean_phone(cls, value):
+        """Backwards-compatible default: Libyan national format (09XXXXXXXX)."""
+        return cls._al_format_phone(value, 'national0')
 
     def _al_resolve_product_lines(self):
         """Build the shipmentProducts payload: [{productId, quantity, price}].
@@ -373,6 +401,15 @@ class AccurateShipment(models.Model):
         text = str(exc)
         return any(n in text for n in needles)
 
+    @classmethod
+    def _al_with_phone_format(cls, inp, fmt):
+        """Copy of the payload with every phone field rendered in *fmt*."""
+        out = dict(inp)
+        for key in cls._AL_PHONE_KEYS:
+            if out.get(key):
+                out[key] = cls._al_format_phone(out[key], fmt)
+        return out
+
     def _al_send_with_fallbacks(self, inp):
         """Send the shipment, adapting to what THIS tenant accepts.
 
@@ -389,14 +426,34 @@ class AccurateShipment(models.Model):
         self.ensure_one()
         company = self.delivery_company_id
 
-        # Shape already learned for this tenant → send it straight away.
+        # Shapes already learned for this tenant → send them straight away.
         if inp.get('shipmentProducts') and company.api_omit_derived_fields:
             inp = {k: v for k, v in inp.items() if k not in self._AL_DERIVED_FIELDS}
+        if company.api_phone_format and company.api_phone_format != 'national0':
+            inp = self._al_with_phone_format(inp, company.api_phone_format)
 
         try:
             return company._al_save_shipment(inp)
         except Exception as exc:
             first_error = exc
+
+        # 1b. Phone rejected — tenants disagree on the shape (09XXXXXXXX vs
+        #     9XXXXXXXX vs 218… vs +218…). Try the others and remember.
+        if self._al_error_says(first_error, 'valid phone', 'phone number',
+                               'هاتف', 'جوال'):
+            for fmt in self._AL_PHONE_FORMATS:
+                if fmt == (company.api_phone_format or 'national0'):
+                    continue
+                try:
+                    result = company._al_save_shipment(
+                        self._al_with_phone_format(inp, fmt))
+                    company.sudo().api_phone_format = fmt
+                    _logger.info(
+                        'Accurate: %s accepts phone format %s — remembered.',
+                        company.name, fmt)
+                    return result
+                except Exception as exc_phone:
+                    first_error = exc_phone
 
         # 2. The tenant derives these from the products — drop and retry.
         if (inp.get('shipmentProducts')

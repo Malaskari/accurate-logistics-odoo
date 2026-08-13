@@ -154,6 +154,20 @@ class AccurateDeliveryCompany(models.Model):
              "shipments (sent / delivered) and fires the delivered / "
              "returned / cancelled flows. Turn off to exclude this company.",
     )
+    api_phone_format = fields.Selection(
+        [
+            ('national0', 'National with leading zero (0912345678)'),
+            ('national', 'National without zero (912345678)'),
+            ('cc', 'Country code (218912345678)'),
+            ('e164', 'International (+218912345678)'),
+        ],
+        string='API Phone Format',
+        default='national0',
+        help='Learned automatically: tenants validate recipient / sender '
+             'phone numbers differently. Set the first time this tenant '
+             'rejects the default shape, so later shipments use the right '
+             'one straight away.',
+    )
     api_omit_derived_fields = fields.Boolean(
         'API Derives Weight/Pieces/Price',
         readonly=True, copy=False,
