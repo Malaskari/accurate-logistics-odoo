@@ -1,8 +1,8 @@
 {
     'name': 'Accurate Logistics Integration',
-    'version': '18.0.1.2.0',
+    'version': '19.0.1.2.0',
     'category': 'Inventory/Delivery',
-    'summary': 'Accurate Logistics API — shipments, COD invoicing, webhook status sync (Odoo 18 build)',
+    'summary': 'Accurate Logistics API — shipments, COD invoicing, webhook status sync (Odoo 19 build)',
     'description': """
 Accurate Logistics Integration
 ================================
@@ -24,7 +24,7 @@ Other features
 - Calculate shipping fees before dispatching.
 - Manual shipment management independent of Sales / Stock.
 - Scheduled status sync cron job.
-- Built for Odoo 18 Community.
+- Built for Odoo 19 Community.
     """,
     'author': '',
     'depends': ['base', 'mail', 'sale_stock', 'account'],
