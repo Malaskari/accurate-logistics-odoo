@@ -1,6 +1,6 @@
 {
     'name': 'Accurate Logistics Integration',
-    'version': '18.0.1.2.0',
+    'version': '18.0.1.3.0',
     'category': 'Inventory/Delivery',
     'summary': 'Accurate Logistics API — shipments, COD invoicing, webhook status sync (Odoo 18 build)',
     'description': """

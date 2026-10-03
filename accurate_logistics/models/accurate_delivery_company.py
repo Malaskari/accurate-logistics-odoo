@@ -1115,7 +1115,7 @@ class AccurateDeliveryCompany(models.Model):
     @classmethod
     def _al_status_match(cls, configured_csv, keywords, status_code,
                          status_name=None, status_id=None,
-                         guard_negation=False):
+                         guard_negation=False, exact_only=False):
         """True if the status (by code / name / id) belongs to a family.
 
         1. Exact match (case-insensitive) of code, name, or id against the
@@ -1134,6 +1134,8 @@ class AccurateDeliveryCompany(models.Model):
         for tok in tokens:
             if tok.upper() in exact:
                 return True
+        if exact_only:
+            return False
 
         name_n = cls._al_norm_name(status_name)
         if not name_n:
@@ -1157,6 +1159,20 @@ class AccurateDeliveryCompany(models.Model):
         return self._al_status_match(
             self.delivered_status_codes, self._AL_DELIVERED_KEYWORDS,
             status_code, status_name, status_id, guard_negation=True,
+        )
+
+    def _is_delivered_exact(self, status_code, status_name=None, status_id=None):
+        """True only when the code/name/id is EXPLICITLY listed in this
+        company's delivered codes — no fuzzy name matching.
+
+        Used to break ties: an exact configured code is the tenant stating
+        plainly what the status means, so it outranks a fuzzy keyword hit
+        from another family (e.g. a name like "Delivered after return
+        attempt" fuzzy-matching RETURN).
+        """
+        return self._al_status_match(
+            self.delivered_status_codes, (),
+            status_code, status_name, status_id, exact_only=True,
         )
 
     def _is_returned_code(self, status_code, status_name=None, status_id=None):

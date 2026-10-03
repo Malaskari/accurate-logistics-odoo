@@ -34,6 +34,9 @@
                decoration-danger="state in ('error', 'returned', 'cancelled')"
                decoration-warning="state in ('draft', 'partial')"/>
         <field name="date"/>
+        <field name="delivered_date" optional="hide"/>
+        <field name="last_sync_date" optional="hide"
+               string="Last Sync"/>
       </list>
     </field>
   </record>
@@ -326,6 +329,12 @@
         <filter string="Error" name="error" domain="[('state','=','error')]"/>
         <filter string="Not Invoiced" name="not_invoiced"
                 domain="[('invoice_id','=',False),('state','=','sent')]"/>
+        <separator/>
+        <filter string="Never Auto-Synced" name="never_synced"
+                domain="[('last_sync_date','=',False)]"/>
+        <filter string="Stuck — Sent over 60 days" name="stuck_sent"
+                domain="[('state','=','sent'),
+                         ('create_date','&lt;', (context_today() - datetime.timedelta(days=60)).strftime('%Y-%m-%d'))]"/>
         <group>
           <filter string="Delivery Company" name="by_company"
                   context="{'group_by': 'delivery_company_id'}"/>

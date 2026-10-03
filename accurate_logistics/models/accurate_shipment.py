@@ -1,5 +1,7 @@
 import hmac
 import logging
+import time
+from datetime import timedelta
 
 from markupsafe import Markup
 
@@ -27,6 +29,21 @@ class AccurateShipment(models.Model):
     ref_number = fields.Char('Your Reference', tracking=True)
     date = fields.Datetime('Shipment Date', default=fields.Datetime.now, tracking=True)
     delivery_date = fields.Date('Expected Delivery', tracking=True)
+    delivered_date = fields.Datetime(
+        'Delivered On', readonly=True, copy=False, index=True,
+        help='When the courier first reported this shipment delivered. Set '
+             'once and never rewritten, so it can anchor the window in which '
+             'the scheduled sync keeps re-checking a delivered shipment for a '
+             'later return. write_date cannot do that — the sync itself '
+             'touches it, so a shipment would pin its own window open.',
+    )
+    last_sync_date = fields.Datetime(
+        'Last Status Sync', readonly=True, copy=False, index=True,
+        help='When the scheduled sync last asked the courier about this '
+             'shipment. The cron processes never-synced shipments first, then '
+             'the least recently synced, so a large backlog drains in rotation '
+             'instead of the same records being polled over and over.',
+    )
 
     # ── Links to Odoo documents ───────────────────────────────────────────────
 
@@ -762,6 +779,57 @@ class AccurateShipment(models.Model):
 
     # ── Status sync ───────────────────────────────────────────────────────────
 
+    def _al_dispatch_status(self, status_name=None, status_id=None):
+        """Fire the flow matching this shipment's CURRENT stored status.
+
+        The single place that decides delivered / returned / cancelled. The
+        webhook, the form button, the bulk action and the cron all used to
+        carry their own copy of this ladder with subtly different guards, so
+        the same shipment could be processed by one path and skipped by
+        another. Returns True when a flow actually ran.
+
+        Returned and cancelled are evaluated BEFORE delivered: when a status
+        is ambiguous, not posting an invoice is the safe direction. The one
+        exception is an EXACTLY configured delivered code — that is the
+        tenant stating plainly what the status means, so it outranks a fuzzy
+        keyword hit from another family (a name like "Delivered after return
+        attempt" must not reverse the invoice and raise a return picking).
+        _on_delivered is idempotent and is called even when the shipment is
+        already delivered, so a picking that was still pending at the first
+        delivery event gets validated on a later pass.
+        """
+        self.ensure_one()
+        company = self.delivery_company_id
+        if not company:
+            return False
+        code = self.api_status_code
+        name = status_name if status_name is not None else self.api_status_name
+
+        exact_delivered = company._is_delivered_exact(code, name, status_id)
+        if not exact_delivered:
+            if company._is_returned_code(code, name, status_id) and self.state != 'returned':
+                self._on_returned()
+                return True
+            if company._is_cancelled_code(code, name, status_id) and self.state != 'cancelled':
+                self._on_cancelled()
+                return True
+        elif (company._is_returned_code(code, name, status_id)
+                or company._is_cancelled_code(code, name, status_id)):
+            # Both families claim this status. We go with delivered because
+            # the code is explicitly configured, but say so — it almost
+            # always means the company's status-code lists need editing.
+            _logger.warning(
+                'Accurate: status %r (%r) on %s matches the DELIVERED list '
+                'exactly AND a returned/cancelled rule — treating it as '
+                'delivered. Review the status codes on delivery company %r.',
+                code, name, self.name, company.name)
+
+        if company._is_delivered_code(code, name, status_id):
+            before_state, before_inv = self.state, self.invoice_id
+            self._on_delivered()
+            return self.state != before_state or self.invoice_id != before_inv
+        return False
+
     def action_sync_status(self):
         for rec in self:
             if not rec.api_id and not rec.code:
@@ -777,15 +845,7 @@ class AccurateShipment(models.Model):
                 # partial / returned / cancelled flows (all idempotent),
                 # otherwise a manually-synced shipment just gets a status
                 # label and no processing.
-                company = rec.delivery_company_id
-                code, name = rec.api_status_code, rec.api_status_name
-                if company._is_delivered_code(code, name):
-                    rec._on_delivered()
-                elif company._is_returned_code(code, name) and rec.state != 'returned':
-                    rec._on_returned()
-                elif company._is_cancelled_code(code, name) and rec.state != 'cancelled':
-                    rec._on_cancelled()
-                elif rec.api_status_code != old_code:
+                if not rec._al_dispatch_status() and rec.api_status_code != old_code:
                     rec.message_post(
                         body='Status updated: <b>%s</b>' % (rec.api_status_name or rec.api_status_code)
                     )
@@ -825,19 +885,8 @@ class AccurateShipment(models.Model):
                 # handlers are idempotent (they early-return if already
                 # processed), so this safely catches up shipments whose
                 # status was synced before the flow logic existed.
-                company = rec.delivery_company_id
-                code, name = rec.api_status_code, rec.api_status_name
-                fired = False
-                # _on_delivered is idempotent — call it even if already
-                # delivered so a stuck outgoing picking gets validated.
-                if company._is_delivered_code(code, name):
-                    rec._on_delivered()
-                    fired = rec.state != 'delivered' or not rec.invoice_id
-                elif company._is_returned_code(code, name) and rec.state != 'returned':
-                    rec._on_returned(); fired = True
-                elif company._is_cancelled_code(code, name) and rec.state != 'cancelled':
-                    rec._on_cancelled(); fired = True
-                elif rec.api_status_code != old_code:
+                fired = rec._al_dispatch_status()
+                if not fired and rec.api_status_code != old_code:
                     rec.message_post(
                         body='Status updated: <b>%s</b>'
                              % (rec.api_status_name or rec.api_status_code)
@@ -1179,14 +1228,7 @@ class AccurateShipment(models.Model):
         # only once) so we call it even if already delivered — this catches up
         # an outgoing picking that was still pending at the first DTR event.
         if company:
-            if company._is_delivered_code(stored_code, status_name, status_id):
-                shipment._on_delivered()
-            elif company._is_returned_code(stored_code, status_name, status_id) \
-                    and shipment.state != 'returned':
-                shipment._on_returned()
-            elif company._is_cancelled_code(stored_code, status_name, status_id) \
-                    and shipment.state != 'cancelled':
-                shipment._on_cancelled()
+            shipment._al_dispatch_status(status_name=status_name, status_id=status_id)
 
         return {'success': True, 'code': code, 'status': stored_code}
 
@@ -1261,6 +1303,8 @@ class AccurateShipment(models.Model):
         # Mark as delivered + log only the FIRST time (idempotent re-runs).
         if self.state != 'delivered':
             self.state = 'delivered'
+            if not self.delivered_date:
+                self.delivered_date = fields.Datetime.now()
             self._so_status_log(
                 en_msg='✅ Shipment <b>%s</b> delivered to the customer.'
                        % (self.code or self.name),
@@ -2838,42 +2882,223 @@ class AccurateShipment(models.Model):
 
     # ── Cron ──────────────────────────────────────────────────────────────────
 
+    # Cron tuning, overridable per database via ir.config_parameter without
+    # touching code, as accurate_logistics.cron_<key>. For the *_days and
+    # *_seconds limits, 0 means "no limit". batch_size and time_budget_seconds
+    # are the exception: 0 or negative there would silently stop the cron
+    # doing anything, so they fall back to the default instead.
+    _AL_CRON_DEFAULTS = {
+        'batch_size': 200,              # shipments per run
+        'max_age_days': 60,             # stop chasing 'sent' older than this
+        'delivered_window_days': 14,    # re-poll 'delivered' this long after delivery
+        'time_budget_seconds': 600,     # stop starting new records after this
+        'sent_share_percent': 75,       # of the batch reserved for 'sent'
+    }
+    # Keys where a non-positive value is meaningless and must not disable the job.
+    _AL_CRON_POSITIVE_ONLY = ('batch_size', 'time_budget_seconds', 'sent_share_percent')
+
+    @api.model
+    def _al_cron_param(self, key):
+        default = self._AL_CRON_DEFAULTS[key]
+        raw = self.env['ir.config_parameter'].sudo().get_param(
+            'accurate_logistics.cron_%s' % key, default)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            _logger.warning(
+                'Accurate cron: ir.config_parameter accurate_logistics.cron_%s '
+                'is not an integer (%r) — using default %s.', key, raw, default)
+            return default
+        if value <= 0 and key in self._AL_CRON_POSITIVE_ONLY:
+            _logger.warning(
+                'Accurate cron: accurate_logistics.cron_%s is %r, which would '
+                'stop the job doing any work — using default %s.',
+                key, raw, default)
+            return default
+        return max(0, value)
+
+    def _al_cron_candidates(self, domain, limit):
+        """Never-synced shipments first, then the least recently synced.
+
+        Postgres sorts NULLs last on ASC, which would put never-synced
+        records at the BACK of the queue — the opposite of what we want — so
+        the two groups are fetched separately rather than relying on a
+        NULLS FIRST clause the ORM does not portably emit.
+        """
+        if limit <= 0:
+            return self.browse()
+        found = self.search(domain + [('last_sync_date', '=', False)], limit=limit)
+        if len(found) < limit:
+            found |= self.search(
+                domain + [('last_sync_date', '!=', False)],
+                order='last_sync_date asc, id asc', limit=limit - len(found),
+            )
+        return found
+
     @api.model
     def cron_sync_statuses(self):
-        # Sync any non-terminal shipment so we also catch returns and
-        # cancellations triggered after delivery (e.g. RTRN reached after DTR).
-        # Only sync shipments whose Delivery Company has auto-sync enabled.
-        enabled_companies = self.env['accurate.delivery.company'].search([
-            ('cron_sync_enabled', '=', True),
-        ])
-        if not enabled_companies:
-            _logger.info('Accurate Logistics cron: no companies have auto-sync enabled.')
+        """Poll the courier for shipments whose status may still change.
+
+        Bounded and resumable. The previous version searched every 'sent' and
+        'delivered' shipment with no limit and ran the whole batch in ONE
+        transaction: on this database that was ~5,900 records and over two
+        hours per run against a 30-minute interval, so it was switched off and
+        the integration lost its safety net. Now each run takes a fixed-size
+        batch, commits per record, and picks the least recently synced first,
+        so a large backlog drains in rotation across runs.
+        """
+        batch = self._al_cron_param('batch_size')
+        max_age = self._al_cron_param('max_age_days')
+        window = self._al_cron_param('delivered_window_days')
+        budget = self._al_cron_param('time_budget_seconds')
+        sent_share = min(100, self._al_cron_param('sent_share_percent'))
+
+        # active_test=False: an ARCHIVED company can still be opted in with
+        # cron_sync_enabled. Archived companies used to be invisible to this
+        # search, so their shipments could never sync and nothing said why.
+        # The flag stays the switch — archiving alone no longer decides.
+        companies = self.env['accurate.delivery.company'].with_context(
+            active_test=False).search([('cron_sync_enabled', '=', True)])
+        if not companies:
+            _logger.info('Accurate cron: no companies have auto-sync enabled.')
             return
-        pending = self.search([
-            ('state', 'in', ('sent', 'delivered')),
-            ('api_id', '!=', False),
-            ('delivery_company_id', 'in', enabled_companies.ids),
-        ])
-        _logger.info('Accurate Logistics cron: syncing %d shipments.', len(pending))
+        archived = companies.filtered(lambda c: not c.active)
+        if archived:
+            # WARNING, not INFO: archiving a company is the natural "stop
+            # polling this courier" action and it no longer does that on its
+            # own, so the operator must be able to see it in a normal log.
+            _logger.warning(
+                'Accurate cron: polling %d ARCHIVED company(ies): %s. Archiving '
+                'alone does not stop the sync — untick "Include in Auto-Sync" '
+                'on the Delivery Company to stop it.',
+                len(archived), ', '.join(archived.mapped('name')))
+
+        now = fields.Datetime.now()
+        base = [
+            ('delivery_company_id', 'in', companies.ids),
+            '|', ('api_id', '!=', False), ('code', '!=', False),
+        ]
+        sent_dom = base + [('state', '=', 'sent')]
+        if max_age:
+            sent_dom += [('create_date', '>=', now - timedelta(days=max_age))]
+        # 'delivered' is re-polled so a return raised AFTER delivery is still
+        # caught — but only for a window. Without one, every delivered
+        # shipment is polled forever and the run cost grows without bound.
+        # The window is anchored on delivered_date, NOT write_date: the sync
+        # writes to the record on every pass, so a write_date window would be
+        # refreshed by its own polling and never expire.
+        delivered_dom = base + [('state', '=', 'delivered')]
+        if window:
+            delivered_dom += [
+                ('delivered_date', '!=', False),
+                ('delivered_date', '>=', now - timedelta(days=window)),
+            ]
+
+        # Reserve a share of the batch for each group. 'sent' always has more
+        # candidates than one batch here, so taking it first with the full
+        # limit would leave delivered with a limit of zero on every run and
+        # the post-delivery return check would never actually run.
+        sent_quota = max(1, batch * sent_share // 100)
+        pending = self._al_cron_candidates(sent_dom, sent_quota)
+        pending |= self._al_cron_candidates(delivered_dom, batch - len(pending))
+        # Hand any unused delivered quota back to 'sent' — excluding what was
+        # already picked, otherwise the same records come back and the spare
+        # capacity is wasted.
+        if len(pending) < batch:
+            pending |= self._al_cron_candidates(
+                sent_dom + [('id', 'not in', pending.ids)], batch - len(pending))
+        if not pending:
+            _logger.info('Accurate cron: nothing due.')
+            return
+
+        if max_age:
+            stale = self.search_count(base + [
+                ('state', '=', 'sent'),
+                ('create_date', '<', now - timedelta(days=max_age)),
+            ])
+            if stale:
+                _logger.warning(
+                    'Accurate cron: %d shipment(s) still "sent" and older than '
+                    '%d days are NO LONGER polled — they need a human. Filter '
+                    'Shipments by state=Sent and Created before %s.',
+                    stale, max_age, (now - timedelta(days=max_age)).date())
+
+        _logger.info('Accurate cron: syncing %d shipment(s) (batch size %d).',
+                     len(pending), batch)
+        # Labels are resolved up-front. Reading rec.name inside an except
+        # handler is a DB read: if the record was deleted by another
+        # transaction since our last commit it raises MissingError from
+        # INSIDE the handler, which escapes the loop and aborts the whole run.
+        labels = {rec.id: (rec.name or rec.code or rec.id) for rec in pending}
+
+        synced = fired = errors = consecutive_errors = 0
+        deadline = time.monotonic() + budget if budget else None
+        processed = 0
         for rec in pending:
+            if deadline and time.monotonic() > deadline:
+                _logger.info(
+                    'Accurate cron: time budget of %ds reached after %d record(s)'
+                    ' — the rest are picked up next run.', budget, processed)
+                break
+            processed += 1
+            label = labels.get(rec.id, rec.id)
+            ok = did_fire = False
             try:
-                if not rec.delivery_company_id:
-                    continue
-                data = rec.delivery_company_id._al_get_shipment(api_id=rec.api_id, code=rec.code)
-                if not data:
-                    continue
-                rec._apply_api_response(data)
-                # State-based dispatch — fire whenever the status maps to a
-                # family and the shipment isn't already in that terminal
-                # state. _on_* handlers are idempotent, so this also catches
-                # up shipments synced before the flow logic existed.
-                company = rec.delivery_company_id
-                code, name = rec.api_status_code, rec.api_status_name
-                if company._is_delivered_code(code, name) and not rec.invoice_id and rec.state != 'delivered':
-                    rec._on_delivered()
-                elif company._is_returned_code(code, name) and rec.state != 'returned':
-                    rec._on_returned()
-                elif company._is_cancelled_code(code, name) and rec.state != 'cancelled':
-                    rec._on_cancelled()
-            except Exception as exc:
-                _logger.warning('Accurate cron: failed for %s: %s', rec.name, exc)
+                # Savepoint per record: a psycopg2 error inside the flow used
+                # to poison the cursor, so every later record in the run failed
+                # with InFailedSqlTransaction and the whole batch was lost.
+                with self.env.cr.savepoint():
+                    company = rec.delivery_company_id
+                    if company:
+                        data = company._al_get_shipment(
+                            api_id=rec.api_id, code=rec.code)
+                        if data:
+                            rec._apply_api_response(data)
+                            ok = True
+                            did_fire = bool(rec._al_dispatch_status())
+            except UserError as exc:
+                # _al_request turns every transport failure into a UserError.
+                # A courier outage would otherwise print a full traceback for
+                # every record in the batch, every run, forever.
+                errors += 1
+                consecutive_errors += 1
+                _logger.warning('Accurate cron: failed for %s: %s', label, exc)
+            except Exception:
+                errors += 1
+                consecutive_errors += 1
+                _logger.exception('Accurate cron: failed for %s', label)
+            else:
+                consecutive_errors = 0
+            # Counters are updated OUTSIDE the savepoint: incremented inside,
+            # they would survive a rollback and over-report the run.
+            if ok:
+                synced += 1
+            if did_fire:
+                fired += 1
+            # Stamp whatever happened, in its own savepoint: a record that
+            # always fails must move to the BACK of the rotation instead of
+            # being retried first on every single run and starving the rest.
+            try:
+                with self.env.cr.savepoint():
+                    rec.last_sync_date = fields.Datetime.now()
+            except Exception:
+                _logger.exception(
+                    'Accurate cron: could not stamp last_sync_date on %s', label)
+            try:
+                self.env.cr.commit()
+            except Exception:
+                self.env.cr.rollback()
+                _logger.exception('Accurate cron: commit failed for %s', label)
+            # Circuit breaker: if nothing is succeeding, the courier API is
+            # down or the credentials are wrong. Stop rather than burn the
+            # whole batch — and the next run retries from where we stopped.
+            if consecutive_errors >= 10 and synced == 0:
+                _logger.error(
+                    'Accurate cron: aborting after %d consecutive failures with '
+                    'no success — the courier API looks unreachable.',
+                    consecutive_errors)
+                break
+        _logger.info(
+            'Accurate cron: %d synced, %d flow(s) fired, %d error(s), '
+            '%d of %d record(s) processed.',
+            synced, fired, errors, processed, len(pending))
