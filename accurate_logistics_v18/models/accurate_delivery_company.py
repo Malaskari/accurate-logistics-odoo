@@ -1,4 +1,5 @@
 import logging
+import re
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1075,35 +1076,87 @@ class AccurateDeliveryCompany(models.Model):
     _AL_CANCELLED_KEYWORDS = ('ملغى', 'ملغي', 'إلغاء', 'الغاء', 'ملغاة',
                               'رفض', 'مرفوض', 'CANCEL', 'REJECT', 'RJCT')
 
+    # Words meaning the status describes an ATTEMPT, a FAILURE, a step still
+    # in progress, or a DIFFERENT outcome (a return / cancellation) — never a
+    # completed delivery. Used ONLY by the delivered family, because that is
+    # the family that moves money: a false positive there posts an invoice
+    # and registers a COD payment for goods the customer never received.
+    # Returned / cancelled deliberately do NOT use this guard — wordings like
+    # "Returned — delivery attempt failed" or "ارتجاع بسبب فشل التسليم" are
+    # genuine returns, and suppressing them would freeze those shipments.
+    _AL_NEGATION_MARKERS = (
+        'FAIL', 'ATTEMPT', 'UNSUCCESS', 'UNABLE', 'UNDELIVER', ' NOT ',
+        'NO ANSWER', 'PENDING', 'OUT FOR', 'ON THE WAY', 'IN TRANSIT',
+        'DELAY', 'POSTPON', 'RESCHEDUL', 'PARTIAL',
+        'CANCEL', 'REJECT', 'RETURN',
+        'فشل', 'محاولة', 'تعذر', ' لم ', 'قيد', 'جاري', 'جارى',
+        'تأجيل', 'مؤجل', 'الطريق', 'جزئ',
+        'ارتجاع', 'إرجاع', 'مرتجع', 'ملغ', 'رفض',
+    )
+
+    # Tokens shorter than this are EXACT-match only. Short codes are the
+    # dangerous ones as substrings: 'DEL' sits inside "DELETED", "Delayed"
+    # and "Delivery attempt failed". Four keeps the real Arabic wordings
+    # (e.g. 'سلمت') working while excluding 'DEL', 'DTR', 'RTS'.
+    _AL_MIN_FUZZY_LEN = 4
+
     @staticmethod
-    def _al_status_match(configured_csv, keywords, status_code,
-                         status_name=None, status_id=None):
+    def _al_norm_name(status_name):
+        """Upper-cased name with punctuation flattened to single spaces and
+        padded with one, so markers like ' NOT ' and 'OUT FOR' match whether
+        the courier writes "Out for delivery", "Out-for-delivery" or
+        "OUT_FOR_DELIVERY"."""
+        name_u = (str(status_name) if status_name else '').upper()
+        if not name_u:
+            return ''
+        collapsed = re.sub(r'[^\w]+', ' ', name_u, flags=re.UNICODE).strip()
+        return ' %s ' % collapsed if collapsed else ''
+
+    @classmethod
+    def _al_status_match(cls, configured_csv, keywords, status_code,
+                         status_name=None, status_id=None,
+                         guard_negation=False):
         """True if the status (by code / name / id) belongs to a family.
 
         1. Exact match (case-insensitive) of code, name, or id against the
-           configured comma-separated list.
+           configured comma-separated list. ALWAYS trusted.
         2. Substring match of any configured token inside the name.
         3. Built-in keyword substring fallback on the name.
+
+        Steps 2 and 3 only consider tokens of at least _AL_MIN_FUZZY_LEN
+        characters, and are skipped entirely when `guard_negation` is set and
+        the name carries a negation marker.
         """
-        name_u = (str(status_name) if status_name else '').upper()
         exact = {str(x).strip().upper() for x in (status_code, status_name, status_id) if x}
         tokens = [t.strip() for t in (configured_csv or '').split(',') if t.strip()]
+
+        # 1. Exact match — always trusted, regardless of length or markers.
         for tok in tokens:
+            if tok.upper() in exact:
+                return True
+
+        name_n = cls._al_norm_name(status_name)
+        if not name_n:
+            return False
+
+        # 2. Negation guard (delivered family only — see _AL_NEGATION_MARKERS).
+        if guard_negation and any(m in name_n for m in cls._AL_NEGATION_MARKERS):
+            return False
+
+        # 3. Fuzzy: configured tokens, then built-in keywords.
+        for tok in list(tokens) + list(keywords):
             tok_u = tok.upper()
-            if tok_u in exact:
-                return True
-            if name_u and tok_u in name_u:
-                return True
-        # Built-in keyword fallback (always on, independent of config).
-        for kw in keywords:
-            if name_u and kw.upper() in name_u:
+            if len(tok_u) >= cls._AL_MIN_FUZZY_LEN and tok_u in name_n:
                 return True
         return False
 
     def _is_delivered_code(self, status_code, status_name=None, status_id=None):
+        # guard_negation: ONLY this family. A false "delivered" posts an
+        # invoice and registers a COD payment for undelivered goods; a false
+        # negative merely leaves the shipment for the next sync to pick up.
         return self._al_status_match(
             self.delivered_status_codes, self._AL_DELIVERED_KEYWORDS,
-            status_code, status_name, status_id,
+            status_code, status_name, status_id, guard_negation=True,
         )
 
     def _is_returned_code(self, status_code, status_name=None, status_id=None):

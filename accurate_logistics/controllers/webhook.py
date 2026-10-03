@@ -48,6 +48,18 @@ class AccurateWebhookController(http.Controller):
             # Some platforms send form data instead of JSON
             payload = dict(kwargs)
 
+        # Everything downstream calls payload.get(...). A JSON array (batched
+        # events) or a bare scalar would raise AttributeError outside the
+        # try/except below and turn every callback into a 500, so reject the
+        # shape here with a response the sender can act on.
+        if not isinstance(payload, dict):
+            _logger.error(
+                'Accurate webhook: expected a JSON object, got %s.',
+                type(payload).__name__,
+            )
+            return _json_response(
+                {'error': 'Expected a JSON object'}, status=400)
+
         _logger.info('Accurate webhook received: %s', json.dumps(payload)[:500])
 
         # auth='none' leaves request.env.uid = None, so .sudo() alone would
@@ -64,7 +76,9 @@ class AccurateWebhookController(http.Controller):
             or request.httprequest.headers.get('Authorization', '').replace('Bearer ', '')
         )
         if not env['accurate.shipment']._webhook_secret_valid(received, payload):
-            _logger.warning('Accurate webhook: invalid secret token received.')
+            # _webhook_secret_valid already logged WHICH branch rejected and
+            # which company owns the secret — don't flatten that to a
+            # context-free warning here.
             return _json_response({'error': 'Unauthorized'}, status=401)
 
         # ── 3. Process via model ──────────────────────────────────────────────
@@ -73,6 +87,20 @@ class AccurateWebhookController(http.Controller):
         except Exception as exc:
             _logger.exception('Accurate webhook: processing error – %s', exc)
             return _json_response({'error': str(exc)}, status=500)
+
+        # A result carrying 'error' means the payload was understood but could
+        # NOT be applied (unknown shipment code, no code at all, …). This used
+        # to return 200, so the courier's dashboard reported every dropped
+        # event as delivered successfully — which is how ~9,900 lost callbacks
+        # went unnoticed for seven weeks. Answer with 422 so the sender can
+        # retry or alert.
+        if isinstance(result, dict) and result.get('error'):
+            # 404 when the shipment simply isn't in Odoo (a PERMANENT outcome
+            # — retrying can never succeed, so don't invite an endless retry
+            # loop); 422 for anything else. _process_webhook already logged
+            # the reason, so don't log it twice.
+            status = 404 if result.pop('not_found', False) else 422
+            return _json_response(result, status=status)
 
         return _json_response(result)
 

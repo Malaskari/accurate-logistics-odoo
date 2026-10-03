@@ -1,3 +1,4 @@
+import hmac
 import logging
 
 from markupsafe import Markup
@@ -865,46 +866,169 @@ class AccurateShipment(models.Model):
 
     # ── Webhook entry point ───────────────────────────────────────────────────
 
+    @staticmethod
+    def _al_secret_eq(a, b):
+        """Constant-time secret comparison; False when either side is empty.
+
+        Compares BYTES, not str: hmac.compare_digest raises TypeError on a
+        str containing non-ASCII, and these values are operator-entered, so
+        an Arabic character or a smart quote in a secret would turn every
+        callback into an unauthenticated 500 instead of a clean 401.
+        """
+        if not a or not b:
+            return False
+        return hmac.compare_digest(str(a).encode('utf-8'), str(b).encode('utf-8'))
+
+    @api.model
+    def _al_webhook_shipment(self, payload):
+        """Resolve the shipment a webhook payload refers to, or an empty set.
+
+        Handles BOTH shapes the couriers send:
+          * the real flat payload — {"shipmentId": 633928, "shipmentCode": "Y059115", ...}
+          * the GraphQL-style nested payload — {"data": {"shipment": {"id":…, "code":…}}}
+
+        Prefers the numeric id over the code: ids are unique per tenant, while
+        a code is only unique within a delivery company.
+        """
+        if not isinstance(payload, dict):
+            return self.browse()
+        data = payload.get('data') if isinstance(payload.get('data'), dict) else payload
+        if not isinstance(data, dict):
+            return self.browse()
+        # Only a REAL nested shipment dict may supply a bare 'id'. For the flat
+        # payload `data is payload`, so reading `payload['id']` here would pick
+        # up a notification/event id from any tenant that adds one and resolve
+        # it against api_id — silently targeting an unrelated shipment.
+        nested = data.get('shipment') if isinstance(data.get('shipment'), dict) else None
+
+        api_id = (nested or {}).get('id') or data.get('shipmentId') or payload.get('shipmentId')
+        if isinstance(api_id, bool):       # JSON `true` would int() to 1
+            api_id = None
+        try:
+            api_id = int(api_id) if api_id not in (None, '', False) else None
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError: JSON `1e999` parses to float('inf'), and int(inf)
+            # raises — uncaught it would 500 the unauthenticated endpoint.
+            api_id = None
+        if api_id:
+            found = self.search([('api_id', '=', api_id)], limit=1)
+            if found:
+                return found
+
+        code = ((nested or {}).get('code') or data.get('shipmentCode')
+                or data.get('code') or payload.get('shipmentCode'))
+        code = str(code).strip() if code not in (None, '', False) else ''
+        if code:
+            return self.search([('code', '=', code)], limit=1)
+        return self.browse()
+
     @api.model
     def _webhook_secret_valid(self, received, payload):
-        """Validate the incoming webhook secret. Accepts when `received`
-        matches:
-          - the secret of the Delivery Company that owns the shipment in the
-            payload (strict, preferred), OR
-          - the global secret (ir.config_parameter), as fallback, OR
-          - any configured company secret (when the shipment isn't found yet).
-        If NO secret is configured anywhere → open mode (allow), preserving
-        the original behaviour for un-configured installs.
+        """Validate the incoming webhook secret.
+
+        Accepts when `received` matches the secret of the Delivery Company
+        that owns the shipment in the payload (strict, preferred), or the
+        global secret as a fallback. If NO secret is configured anywhere →
+        open mode (allow), preserving behaviour for un-configured installs.
+
+        Two rules exist because of a real incident:
+
+        * Archived companies are looked up but ALWAYS REJECTED. Archiving a
+          company used to make its secret vanish from the lookup silently —
+          that dropped ~9,900 callbacks over seven weeks with nothing but a
+          generic warning. We now detect that exact case and say so. We do
+          NOT accept it: a sandbox/test merchant account often points at the
+          production URL, and honouring an archived company's secret would
+          let test traffic write to live records.
+        * Every rejection logs WHICH branch rejected and WHICH company owns
+          the secret, at ERROR level, so a rejection storm is visible in log
+          monitoring instead of silent.
         """
         Param = self.env['ir.config_parameter'].sudo()
         global_secret = Param.get_param('accurate_logistics.webhook_secret', '') or ''
 
-        companies = self.env['accurate.delivery.company'].sudo().search([
+        Company = self.env['accurate.delivery.company'].sudo()
+        # active_test=False so an archived owner is still VISIBLE here — we
+        # need to tell "archived company's secret" apart from "unknown
+        # secret" in the log. Visibility only; it is still rejected below.
+        known = Company.with_context(active_test=False).search([
             ('webhook_secret', '!=', False),
         ])
-        company_secrets = {c.webhook_secret for c in companies if c.webhook_secret}
+        active_secrets = {c.webhook_secret for c in known if c.active and c.webhook_secret}
 
         # Nothing configured anywhere → don't block (open mode).
-        if not global_secret and not company_secrets:
+        if not global_secret and not active_secrets:
             return True
         if not received:
+            # WARNING, not ERROR: the endpoint is public, so every port
+            # scanner hitting it would otherwise flood the error log.
+            _logger.warning('Accurate webhook REJECTED: no secret supplied.')
             return False
 
-        # Try to scope strictly to the shipment's own company.
-        data = payload.get('data') if isinstance(payload.get('data'), dict) else payload
-        shipment_data = {}
-        code = None
-        if isinstance(data, dict):
-            shipment_data = data.get('shipment') if isinstance(data.get('shipment'), dict) else data
-            code = (shipment_data or {}).get('code') or data.get('code')
-        if code:
-            shipment = self.search([('code', '=', code)], limit=1)
-            company = shipment.delivery_company_id if shipment else False
-            if company and company.webhook_secret:
-                return received in (company.webhook_secret, global_secret)
+        # ── Cheap gate BEFORE any shipment lookup ─────────────────────────
+        # route is auth='none', so an unauthenticated caller must not be able
+        # to make us run shipment searches. If the token belongs to nobody we
+        # know, stop here.
+        owner = known.filtered(
+            lambda c: self._al_secret_eq(received, c.webhook_secret))
+        if not owner and not self._al_secret_eq(received, global_secret):
+            _logger.warning(
+                'Accurate webhook REJECTED: secret matches no configured '
+                'delivery company and is not the global secret.')
+            return False
 
-        # Shipment not found / its company has no secret → accept any valid one.
-        return received == global_secret or received in company_secrets
+        # ── Strict path: scope to the company owning this shipment ────────
+        shipment = self._al_webhook_shipment(payload)
+        company = shipment.delivery_company_id if shipment else False
+        if company:
+            if not company.active:
+                _logger.error(
+                    'Accurate webhook REJECTED: shipment %s belongs to ARCHIVED '
+                    'delivery company %r (id %s). Un-archive it, or move the '
+                    'shipments to the active company and register that '
+                    "company's secret in the courier dashboard.",
+                    shipment.code or shipment.id, company.name, company.id,
+                )
+                return False
+            if company.webhook_secret:
+                if (self._al_secret_eq(received, company.webhook_secret)
+                        or self._al_secret_eq(received, global_secret)):
+                    return True
+                _logger.error(
+                    'Accurate webhook REJECTED: secret does not match delivery '
+                    'company %r (id %s) which owns shipment %s.',
+                    company.name, company.id, shipment.code or shipment.id,
+                )
+                return False
+            # Owner has no secret of its own. Accept the global secret, and
+            # also any OTHER active company's secret — that is how a
+            # multi-company install where only one company carries a secret
+            # has always worked, and tightening it here would 401 a config
+            # that worked the day before the upgrade.
+            if self._al_secret_eq(received, global_secret) or owner.filtered('active'):
+                return True
+            _logger.error(
+                'Accurate webhook REJECTED: delivery company %r (id %s) owns '
+                'shipment %s but has NO webhook secret set, and the secret '
+                'received belongs to ARCHIVED company %r (id %s). Set a secret '
+                'on company %s and register it in the courier dashboard.',
+                company.name, company.id, shipment.code or shipment.id,
+                owner[:1].name, owner[:1].id, company.id,
+            )
+            return False
+
+        # ── Shipment unknown → accept the global or an ACTIVE company's ───
+        # The gate above already proved `received` is the global secret or
+        # belongs to some company, so only the archived case can fail here.
+        if self._al_secret_eq(received, global_secret) or owner.filtered('active'):
+            return True
+        _logger.error(
+            'Accurate webhook REJECTED: the secret belongs to ARCHIVED '
+            'delivery company %r (id %s). Register the ACTIVE company\'s '
+            'secret in the courier dashboard, or un-archive that company.',
+            owner[:1].name, owner[:1].id,
+        )
+        return False
 
     @api.model
     def _process_webhook(self, payload):
@@ -921,6 +1045,10 @@ class AccurateShipment(models.Model):
         #     "deliveredAmount": "0", "notes": null }
         # We also keep back-compat for the GraphQL-style nested shape
         #   { "data": { "shipment": { "code": ..., "status": {id,code,name} } } }
+        # Keep the untouched payload: the shipment is resolved by the SAME
+        # helper the secret check used, so authorisation and processing can
+        # never end up pointing at two different records.
+        raw_payload = payload
         if isinstance(payload.get('data'), dict):
             payload = payload['data']
         shipment_data = payload.get('shipment') if isinstance(payload.get('shipment'), dict) else payload
@@ -943,14 +1071,14 @@ class AccurateShipment(models.Model):
         status_name = status_obj.get('name') or payload.get('statusName') or ''
         status_id = status_obj.get('id') or ''
 
-        if not code:
-            _logger.warning('Accurate webhook: no shipment code in payload %s', payload)
-            return {'error': 'No shipment code in payload'}
-
-        shipment = self.search([('code', '=', code)], limit=1)
+        shipment = self._al_webhook_shipment(raw_payload)
         if not shipment:
+            if not code:
+                _logger.warning(
+                    'Accurate webhook: no shipment code in payload %s', payload)
+                return {'error': 'No shipment code in payload', 'not_found': True}
             _logger.warning('Accurate webhook: shipment not found for code %s', code)
-            return {'error': 'Shipment not found: %s' % code}
+            return {'error': 'Shipment not found: %s' % code, 'not_found': True}
 
         company = shipment.delivery_company_id
 
